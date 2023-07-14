@@ -1,0 +1,3 @@
+﻿        arguments:
+        setvelocity(number) - sets the velocity used for the projectile calculations
+        aim - toggles auto aim on and off
