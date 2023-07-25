@@ -23,36 +23,31 @@ namespace IngameScript
 {
     partial class Program : MyGridProgram
     {
+        
+        //Inconspcuous name :D
+        string GroupName = "Flight Control";
 
-
-        string TurretGroupName = "Turrets";
-        string GyroGroupName = "Gyros";
-
-        string ForwardReferenceName = "Cockpit";
 
         //offset the forward reference
         float OffsetVert = -5; //offset in meters, positive is up
         float OffsetCoax = 0; //offset in meters, positive is forward
         float OffsetHoriz = 0; //offset in meters, positive is right
 
-        
 
+        float maxAngular = 30.0f; //Max angular velocity in RPM, set to 60 for small grid and 30 for large grid (or something less if you wish for slower seek)
         float ProjectileVelocity = 2000.0f; //Initialize this if you only have one primary weapon, otherwise run with argument to set velocity
-        float rollSensitivityMultiplier = 1000.0f; //Increase if spinning too slowly, decrease if spinning too quickly
+        float rollSensitivityMultiplier = 1; //Increase if spinning too slowly, decrease if spi   nning too quickly
 
-
-
+        AimType aimType = AimType.TurretAverage; //Valid options are CenterOfMass, TurretAverage, and RandomTurretTarget. Can also be set with argument
+    
         //PID CONFIG
         //Ask Gxaps for help if you don't know how to tune
 
-        //Level one PID, for large oscellations
-        float l1P = 300f;
-        float l1I = 0f;
-        float l1D = 10f;
-        //Level two PID, for vibrations
-        float l2P = 1f;
-        float l2I = 0f;
-        float l2D = 0.5f;
+        //Level one PID, for getting to the target
+        float kP = 40.0f;
+        float kI = 0.0f;
+        float kD = 15.0f;
+
         const double TimeStep = 1.0 / 60.0;
 
 
@@ -60,66 +55,106 @@ namespace IngameScript
 
         //No touchy below >:(
 
+        int maximumLogLength = 20;
 
-
-
-
+        string echoMessage = "";
         bool aim = true;
-        bool active = true;
 
-        Vector3D previousTargetVelocity;
 
-        IMyShipController forwardReference;
+        List<IMyShipController> controllers;
+        IMyShipController currentController;
         List<IMyLargeTurretBase> turrets;
+        Dictionary<IMyLargeTurretBase, MyDetectedEntityInfo> turretTargets;
         List<IMyGyro> gyros;
 
-        PID l1pitch;
-        PID l1yaw;
-        PID l1roll;
-        PID l2pitch;
-        PID l2yaw;
-        PID l2roll;
+
+
+        MyDetectedEntityInfo target;
+        Vector3D primaryShipAimPos = Vector3D.Zero;
+        bool hasTarget = false;
+
+        ShipAim ShipAim;
+
+        string[] Args =
+        {
+            "toggle ship aim",
+            "set velocity",
+            "set aim type",
+            "cycle aim type",
+        };
+        public enum AimType
+        {
+            CenterOfMass, //Useful for maneuverable and small targets
+            TurretAverage, //Useful for large targets
+            RandomTurretTarget //Useful for strike runs on large targets, or sniping reactors and other critical components
+        }
 
         public Program()
         {
-            l1pitch = new PID(l1P, l1I, l1D, TimeStep);
-            l1yaw = new PID(l1P, l1I, l1D, TimeStep);
-            l1roll = new PID(l1P, l1I, l1D, TimeStep);
-            l2pitch = new PID(l2P, l2I, l2D, TimeStep);
-            l2yaw = new PID(l2P, l2I, l2D, TimeStep);
-            l2roll = new PID(l2P, l2I, l2D, TimeStep);
+            
+            Targeting.program = this;
+            InitializeShipAim();
+        }
+
+
+
+        private void InitializeShipAim()
+        {
+            ShipAimConfig aimDetails = new ShipAimConfig();
+            aimDetails.program = this;
+            aimDetails.OffsetVert = OffsetVert;
+            aimDetails.OffsetCoax = OffsetCoax;
+            aimDetails.OffsetHoriz = OffsetHoriz;
+            aimDetails.rollSensitivityMultiplier = rollSensitivityMultiplier;
+            aimDetails.maxAngular = maxAngular;
+            aimDetails.TimeStep = TimeStep;
+            aimDetails.kP = kP;
+            aimDetails.kI = kI;
+            aimDetails.kD = kD;
 
             Runtime.UpdateFrequency = UpdateFrequency.Update1 | UpdateFrequency.Update100;
-            forwardReference = GridTerminalSystem.GetBlockWithName(ForwardReferenceName) as IMyShipController;
-            turrets = new List<IMyLargeTurretBase>();
-            gyros = new List<IMyGyro>();
+
+
             List<IMyBlockGroup> groups = new List<IMyBlockGroup>();
 
             GridTerminalSystem.GetBlockGroups(groups);
+
+            gyros = new List<IMyGyro>();
+            turrets = new List<IMyLargeTurretBase>();
+            controllers = new List<IMyShipController>();
+
+            bool groupFound = false;
             foreach (IMyBlockGroup group in groups)
             {
-                if (group.Name == TurretGroupName)
+                if (group.Name == GroupName)
                 {
+                    groupFound = true;
                     group.GetBlocksOfType(turrets);
-                }
-                if (group.Name == GyroGroupName)
-                {
                     group.GetBlocksOfType(gyros);
+                    group.GetBlocksOfType(controllers);
                 }
             }
+            ShipAim = new ShipAim(aimDetails, gyros);
+            if (!groupFound)
+            {
+                Runtime.UpdateFrequency = UpdateFrequency.None;
+                Echo("No group found, please create a group named \"" + GroupName + "\" and add the required blocks to it, then recompile!");
+            }
+            if (controllers.Count > 0)
+            {
+                currentController = controllers[0];
+            }
+
             foreach (IMyGyro gyro in gyros)
             {
                 gyro.GyroOverride = false;
             }
         }
 
-        public void Save()
-        {
-
-        }
-
         public void Main(string argument, UpdateType updateType)
         {
+            
+            Echo("Aim type: " + aimType.ToString());
             if ((updateType & (UpdateType.Trigger | UpdateType.Terminal)) != 0)
             {
                 RunCommand(argument);
@@ -135,17 +170,41 @@ namespace IngameScript
             }
             if ((updateType & UpdateType.Update100) != 0)
             {
-                //Run new target logic here
+                
+            }
+            UpdateLog();
+        }
+
+        private void UpdateLog()
+        {
+            //Clear old lines from the log by counting \n characters
+            int lineCount = 0;
+            for (int i = 0; i < echoMessage.Length; i++)
+            {
+                if (echoMessage[i] == '\n')
+                {
+                    lineCount++;
+                }
             }
 
+            if (lineCount > maximumLogLength)
+            {
+                int index = echoMessage.LastIndexOf('\n');
+                echoMessage = echoMessage.Remove(index);
+            }
+            
+            Echo("\n" + echoMessage);
         }
         private void RunCommand(string arg)
         {
-            if (arg == "toggle")
+            arg = arg.ToLower();
+            if (arg == Args[0])
             {
+                
                 aim = !aim;
+                echoMessage = "aim set to " + aim.ToString() + "\n" + echoMessage;
             }
-            else if (arg.StartsWith("setvelocity"))
+            else if (arg.StartsWith(Args[1]))
             {
                 //If setvel is parsed with any series of numbers, set the projectile velocity to that number
                 //loop through string to find the first number
@@ -156,181 +215,270 @@ namespace IngameScript
                         try
                         {
                             ProjectileVelocity = float.Parse(arg.Substring(i));
+                            echoMessage = "Set velocity to " + ProjectileVelocity.ToString() + "\n" + echoMessage;
                         }
                         catch
                         {
-                              Echo("Error parsing velocity, please remove any bad characters");
+                            echoMessage = "Error parsing velocity, please remove any bad characters\n" + echoMessage;
+                              //Echo("Error parsing velocity, please remove any bad characters");
                         }
                         break;
                     }
                 }
             }
+            //set aim type
+            else if (arg.StartsWith(Args[2]))
+            {
+                for (int i = Args[2].Length - 1; i < arg.Length; i++)
+                {
+                    foreach (AimType aimType in Enum.GetValues(typeof(AimType)))
+                    {
+                        if (arg.Substring(i) == aimType.ToString().ToLower())
+                        {
+                            this.aimType = aimType;
+                            echoMessage = "Aim type set to " + aimType.ToString() + "\n" + echoMessage;
+                            return;
+                        }
+                    }
+                }
+                echoMessage = "Couldn't find aimtype!\n" + echoMessage;
+            }
+            //cycle aim type
+            else if (arg.StartsWith(Args[3]))
+            {
+                  int index = (int)aimType;
+                index++;
+                if (index >= Enum.GetValues(typeof(AimType)).Length)
+                {
+                    index = 0;
+                }
+                aimType = (AimType)index;
+                echoMessage = "Aim type set to " + aimType.ToString() + "\n" + echoMessage;
+            }
+            else
+            {
+                string echoMessage = "Invalid argument! Valid arguments are:\n";
+                foreach (string argString in Args)
+                {
+                    echoMessage += argString + "\n";
+                }
+                this.echoMessage = echoMessage + this.echoMessage;
+            }
         }
         private void RunContinuousLogic()
         {
+            
+            SetCurrentController();
+            Targeting.currentController = currentController;
+            GetTurretTargets(turrets, out turretTargets);
+            primaryShipAimPos = GetShipTarget(out hasTarget, ref target, turretTargets);
+            UpdateShipAim();
+            
+        }
+        private void UpdateShipAim()
+        {
+            
             //check if the forward reference is valid
-            if (forwardReference == null)
+            if (controllers.Count == 0)
             {
-                Echo("No controller found, please name a cockpit " + '"' + ForwardReferenceName + '"' + ", or rename the ForwardReferenceName field to something else, and recompile!");
+                Echo("No controller found, please include a controller in the group, and recompile!");
                 return;
             }
             if (gyros.Count == 0)
             {
-                Echo("No gyros found, please group gyros in the group " + '"' + GyroGroupName + '"' + ", or rename the GyroGroupName field to something else, and recompile!");
+                Echo("No gyros found, please include gyros in the group, and recompile!");
                 return;
             }
             if (turrets.Count == 0)
             {
-                Echo("No turrets found, please group turrets in the group " + '"' + TurretGroupName + '"' + ", or rename the TurretGroupName field to something else, and recompile!");
+                Echo("No turrets found, please include turrets in the group, and recompile!");
                 return;
             }
-            CheckForTargets();
+            Echo("Using current controller: " + currentController.CustomName);
+            ShipAimUpdate newDetails = new ShipAimUpdate();
+            newDetails.target = target;
+            newDetails.aimPos = primaryShipAimPos;
+            newDetails.hasTarget = hasTarget;
+            newDetails.aim = aim;
+            newDetails.currentController = currentController;
+            newDetails.ProjectileVelocity = ProjectileVelocity;
+            Echo("Currently targeted grid: " + newDetails.target.Name);
+
+            ShipAim.CheckForTargets(newDetails);
         }
-
-
-        void CheckForTargets()
+        void SetCurrentController()
         {
-            
-            bool result;
-            MyDetectedEntityInfo target = GetTarget(out result);
-            if (result && aim)
+            foreach(IMyShipController controller in controllers)
             {
-                active = true;
-                Echo("Fuck shit up, captain!");
-                //get reference pos
-                MatrixD refOrientation = forwardReference.WorldMatrix;
-                Vector3D referencePosition = forwardReference.GetPosition();
-                //Offset reference position
-                referencePosition += refOrientation.Up * OffsetVert;
-                referencePosition += refOrientation.Forward * OffsetCoax;
-                referencePosition += refOrientation.Right * OffsetHoriz;
-                Vector3D leadPos = GetTargetLeadPosition(target.Position, target.Velocity, referencePosition, forwardReference.CubeGrid.LinearVelocity, ProjectileVelocity, TimeStep);
-                Vector3D Error = CalculateGyroValues(leadPos, refOrientation, referencePosition);
-                //Get roll commands from the cockpit
-                float roll = forwardReference.RollIndicator;
-
-                ApplyGyroValues(Error, refOrientation, roll);
-            }
-            else
-            {
-
-                Echo("All systems nominal");
-                if (active)
+                //do a validity check
+                if (controller == null)
                 {
-                    active = false;
-                    foreach (IMyGyro gyro in gyros)
-                    {
-                        gyro.GyroOverride = false;
-                    }
+                    controllers.Remove(controller);
+
                 }
-
+            }
+            foreach(IMyShipController controller in controllers)
+            {
+                if (controller.IsUnderControl && controller.CanControlShip)
+                {
+                    currentController = controller;
+                    return;
+                }
+            }
+            try
+            {
+                currentController = controllers[0];
+            }
+            catch
+            {
+                //no controllers
             }
         }
 
-        MyDetectedEntityInfo GetTarget(out bool result)
+        
+        void GetTurretTargets(List<IMyLargeTurretBase> turrets, out Dictionary<IMyLargeTurretBase, MyDetectedEntityInfo> targets)
         {
-            foreach (IMyLargeTurretBase turret in turrets)
+            //put in separate for loop for efficiency or something
+            foreach(IMyLargeTurretBase turret in turrets)
             {
-                if (turret == null)
+                if (turret.Closed)
                 {
-                    Echo("removing bad turret");
+                    echoMessage = "removing bad turret " + turret.CustomName + "\n" + echoMessage ;
                     turrets.Remove(turret);
                     continue;
                 }
+            }
 
+            targets = new Dictionary<IMyLargeTurretBase, MyDetectedEntityInfo>();
+            foreach(IMyLargeTurretBase turret in turrets)
+            {
+                targets.Add(turret, turret.GetTargetedEntity());
+            }
+        }
+
+        //Rework to:
+        //Check the target of every turret, pick the most targeted target
+        //Get the block target of each turret on that target
+        //Evaluate the block target positions, and return a position that roughly represents a cluster of blocks
+        //Or perhaps just average all the target positions?
+        Vector3D GetShipTarget(out bool result, ref MyDetectedEntityInfo currentTarget, Dictionary<IMyLargeTurretBase, MyDetectedEntityInfo> targets)
+        {
+            result = false;
+            MyDetectedEntityInfo finalTarget = new MyDetectedEntityInfo();
+
+            Dictionary<MyDetectedEntityInfo, int> detectionCount = new Dictionary<MyDetectedEntityInfo, int>();
+            foreach (KeyValuePair<IMyLargeTurretBase, MyDetectedEntityInfo> pair in targets)
+            {
+
+                if (aimType == AimType.CenterOfMass)
+                {
+
+                }
+                IMyLargeTurretBase turret = pair.Key;
+                MyDetectedEntityInfo target = pair.Value;
                 if (turret.HasTarget)
                 {
-                    result = true;
-                    return turret.GetTargetedEntity();
+                    
+                    if (target.EntityId == currentTarget.EntityId)
+                    {
+                        switch (aimType)
+                        {
+                            case AimType.CenterOfMass:
+                                result = true;
+                                return target.Position;
+                            case AimType.TurretAverage:
+                                break;
+                            case AimType.RandomTurretTarget:
+                                if (target.HitPosition != null)
+                                {
+                                    result = true;
+                                    return (Vector3D)target.HitPosition;
+                                }
+                                break;
+                        }
+                        result = true;
+                        finalTarget = target;
+                    }
+                    if (detectionCount.ContainsKey(target))
+                    {
+                        detectionCount[target]++;
+                    }
+                    else
+                    {
+                        detectionCount.Add(target, 1);
+                    }
+                    
                 }
             }
-            result = false;
-            return new MyDetectedEntityInfo();
-        }
-        Vector3D GetTargetLeadPosition(Vector3D targetPos, Vector3D targetVel, Vector3D shooterPos, Vector3D shooterVel, float projectileSpeed, double timeStep)
-        {
-            if (!previousTargetVelocity.IsValid())
+            //If the current target couldn't be found, then find the most detected target
+            
+            if (!result)
             {
-                previousTargetVelocity = targetVel;
-            }
-            Vector3D deltaV = targetVel - previousTargetVelocity;
-            Vector3D targetToShooter = shooterPos - targetPos;
-
-            double distanceToTarget = targetToShooter.Length();
-            double timeToReachTarget = distanceToTarget / projectileSpeed;
-
-            Vector3D relativeVel = targetVel + deltaV - shooterVel;
-            Vector3D aimpointPos = targetPos + relativeVel * timeToReachTarget;
-
-
-
-            previousTargetVelocity = targetVel;
-            return aimpointPos;
-        }
-
-        Vector3D CalculateGyroValues(Vector3D targetPos, MatrixD refOrientation, Vector3D referencePosition)
-        {
-
-
-            Vector3D targetDirection = targetPos - referencePosition;
-            Vector3D transformedDirection = VectorMath.SafeNormalize(Vector3D.TransformNormal(targetDirection, MatrixD.Transpose(refOrientation)));
-
-            //Calculate the errors
-            double pitchError = Math.Atan2(-transformedDirection.Y, Math.Sqrt(transformedDirection.X * transformedDirection.X + transformedDirection.Z * transformedDirection.Z));
-            double yawError = Math.Atan2(transformedDirection.X, transformedDirection.Z);
-            yawError = (yawError - Math.Sign(yawError) * Math.PI) * -1;
-            double rollError = 0.0;
-
-            //Echo("Pitch Error: " + pitchError.ToString() + "\nYaw Error: " + yawError.ToString());
-
-            //Compensate
-            return CompensateError(pitchError, yawError, rollError);
-
-        }
-
-        Vector3D CompensateError(double pitchError, double yawError, double rollError)
-        {
-            double pitchCompensated1 = l1pitch.Control(pitchError);
-            double yawCompensated1 = l1yaw.Control(yawError);
-            double rollCompensated1 = l1roll.Control(rollError);
-            //Echo("level 1 compensation:");
-            //Echo(new Vector3D(pitchCompensated1, yawCompensated1, rollCompensated1).ToString());
-
-            double pitchError2 = pitchCompensated1 - pitchError;
-            double yawError2 = yawCompensated1 - yawError;
-            double rollError2 = rollCompensated1 - rollError;
-
-            double pitchCompensated2 =l2pitch.Control(pitchError2);
-            double yawCompensated2 = l2yaw.Control(yawError2);
-            double rollCompensated2 = l2roll.Control(rollError2);
-            //Echo("level 2 compensation:");
-            //Echo(new Vector3D(pitchCompensated2, yawCompensated2, rollCompensated2).ToString());
-            return new Vector3D(pitchCompensated2, yawCompensated2, rollCompensated2);
-        }
-
-        //Apply the results
-        public void ApplyGyroValues(Vector3D pitchYawRoll, MatrixD refOrientation, float roll)
-        {
-            pitchYawRoll.Z = roll * rollSensitivityMultiplier;
-            Vector3D transformedAngles = Vector3D.TransformNormal(pitchYawRoll, refOrientation);
-
-            foreach (IMyGyro gyro in gyros)
-            {
-                if (gyro == null)
+                int max = 0;
+                foreach (KeyValuePair<MyDetectedEntityInfo, int> pair in detectionCount)
                 {
-                    Echo("Removing bad gyro!");
-                    gyros.Remove(gyro);
-                    continue;
+                    if (pair.Value > max)
+                    {
+                        result = true;
+                        max = pair.Value;
+                        finalTarget = pair.Key;
+                    }
                 }
-                gyro.GyroOverride = true;
-                MatrixD gyroOrientation = MatrixD.Transpose(gyro.WorldMatrix);
-                Vector3D gyroRelativeAngles = Vector3D.TransformNormal(transformedAngles, gyroOrientation);
-
-                gyro.Pitch = (float)gyroRelativeAngles.X;
-                gyro.Roll = (float)gyroRelativeAngles.Z;
-                gyro.Yaw = (float)gyroRelativeAngles.Y;
             }
+
+            
+            if (result)
+            {
+
+                currentTarget = finalTarget;
+                //Get the average position of the turret targets
+                return AverageTurretTarget(finalTarget, targets);
+            }
+            else
+            {
+                return Vector3D.Zero;
+            }    
         }
+        
+        Vector3D AverageTurretTarget(MyDetectedEntityInfo target, Dictionary<IMyLargeTurretBase, MyDetectedEntityInfo> turrets)
+        {
+            List<Vector3D> aimpoints = new List<Vector3D>();
+            foreach (KeyValuePair<IMyLargeTurretBase, MyDetectedEntityInfo> pair in turrets)
+            {
+                IMyLargeTurretBase turret = pair.Key;
+                MyDetectedEntityInfo turretTarget = pair.Value;
+                if (turretTarget.EntityId == target.EntityId)
+                {
+                    if (turretTarget.HitPosition != null)
+                    {
+                        aimpoints.Add((Vector3D)turretTarget.HitPosition);
+                    }
+                }
+            }
+
+            return AverageVectorList(aimpoints);
+
+        }
+
+
+        private Vector3D AverageVectorList(List<Vector3D> vectors)
+        {
+            double x = 0;
+            double y = 0;
+            double z = 0;
+            foreach (Vector3D vector in vectors)
+            {
+                x += vector.X;
+                y += vector.Y;
+                z += vector.Z;
+            }
+            x /= vectors.Count;
+            y /= vectors.Count;
+            z /= vectors.Count;
+            return new Vector3D(x, y, z);
+        }
+    
+
     }
 }
 

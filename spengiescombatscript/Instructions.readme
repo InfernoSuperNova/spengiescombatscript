@@ -1,3 +1,27 @@
-﻿        arguments:
+﻿        Current features:
+        Target prioritization - prioritizes the target that you have the most locked onto
+        Acceleration - Accounts for acceleration in addition to velocity and position
+        Super easy setup - Place all the required blocks in a group, and you're good to go. Promise.
+        Toggle on/off: - see arguments below
+        Set velocity - see arguments below
+        Turret based targeting - LiDAR to be added later
+
+
+        Arguments:
         setvelocity(number) - sets the velocity used for the projectile calculations
-        aim - toggles auto aim on and off
+        toggle - toggles auto aim on and off
+
+
+        TBA:
+        Individual weapno aim and fire (like that one turret script I made)
+        LiDAR based targeting
+
+
+
+
+
+        The scope of this script is likely to increase exponentially.
+        Merge with my CIWS script and my anti spin turret scripts
+        Add additional features, such as:
+        Gatling and interior turrets will instantly jump to their targets
+        Enhanced aim for custom turret controllers
