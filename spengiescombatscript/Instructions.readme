@@ -5,23 +5,25 @@
         Toggle on/off: - see arguments below
         Set velocity - see arguments below
         Turret based targeting - LiDAR to be added later
+        Completely autonomous AI mode - simulates how a good player might fly
 
 
-        Arguments:
-        setvelocity(number) - sets the velocity used for the projectile calculations
-        toggle - toggles auto aim on and off
+        Arguments (all case INsensitive):
+        toggle ship aim                             Master switch for aiming
+        set velocity                                Sets the velocity of the projectile used for lead calculations
+        set aim type                                Sets the aim type, valid arguments are CenterOfMass, TurretAverage, and RandomTurretTarget. Still case INsensitive.
+        cycle aim type                              Cycles the aim type between the three valid types
+        toggle turret aim                           Toggles turret aiming override
+        set turret velocity                         Sets the velocity of the projectile used for turret lead calculations
+        unfuck turrets                              Attempts to fix turrets that have broken due to Keen. Causes turrets to retarget in the process
+        retarget turrets                            Same as unfuck
 
 
         TBA:
-        Individual weapno aim and fire (like that one turret script I made)
+        Individual weapon aim and fire (like that one turret script I made)
         LiDAR based targeting
 
 
-
-
-
-        The scope of this script is likely to increase exponentially.
-        Merge with my CIWS script and my anti spin turret scripts
-        Add additional features, such as:
-        Gatling and interior turrets will instantly jump to their targets
-        Enhanced aim for custom turret controllers
+        To set up:
+        Place all of your gyroscopes, targeting turrets (artillery etc), and a seat in a group. 
+        OPTIONAL: Add a LCD to the group to display targeting information, add railguns and thrusters to the group for AI controlled spin to win and firing

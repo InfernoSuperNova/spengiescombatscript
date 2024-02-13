@@ -53,7 +53,10 @@
   <Import Project="MDK/MDK.options.props" />
   <Import Project="MDK/MDK.paths.props" Condition="exists('MDK/MDK.paths.props')" />
   <ItemGroup>
+    <Compile Include="Data.cs" />
+    <Compile Include="FibonacciSphereGenerator.cs" />
     <Compile Include="Helpers.cs" />
+    <Compile Include="LCDManager.cs" />
     <Compile Include="MDK\Bootstrapper.cs" />
     <AdditionalFiles Include="MDK\MDK.options.props">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
@@ -68,6 +71,8 @@
     <AdditionalFiles Include="MDK\whitelist.cache" />
     <Compile Include="ShipAim.cs" />
     <Compile Include="Targeting.cs" />
+    <Compile Include="Thrusters.cs" />
+    <Compile Include="Turrets.cs" />
     <Compile Include="VectorMath.cs" />
   </ItemGroup>
   <ItemGroup>

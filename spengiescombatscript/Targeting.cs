@@ -13,27 +13,49 @@ namespace IngameScript
     {
         public static IMyShipController currentController;
         public static MyGridProgram program;
-        public static Vector3D GetTargetLeadPosition(Vector3D targetPos, Vector3D targetVel, Vector3D shooterPos, Vector3D shooterVel, float projectileSpeed, double timeStep, ref Vector3D previousTargetVelocity)
+        public static Vector3D GetTargetLeadPosition(Vector3D targetPos, Vector3D targetVel, MatrixD targetAngularVel, Vector3D shooterPos, Vector3D shooterVel, float projectileSpeed, double timeStep, ref Vector3D previousTargetVelocity, bool doEcho, bool leadAcceleration)
         {
             Vector3D deltaV = (targetVel - previousTargetVelocity) / timeStep;
-            //Echo target acceleration to 2dp
+
             Vector3D relativePos = targetPos - shooterPos;
             Vector3D relativeVel = targetVel - shooterVel;
             Vector3D gravity = currentController.GetNaturalGravity();
-            double timeToIntercept = CalculateTimeToIntercept(relativePos, relativeVel, deltaV, projectileSpeed);
-            Vector3D targetLeadPos = targetPos + ((deltaV + relativeVel) * timeToIntercept) + (gravity * timeToIntercept);
+
+            double timeToIntercept;
+            Vector3D targetLeadPos = Vector3D.Zero;
+            if (leadAcceleration)
+            {
+                timeToIntercept = CalculateTimeToIntercept(relativePos, relativeVel, deltaV, projectileSpeed);
+                targetLeadPos = targetPos + ((deltaV + relativeVel) * timeToIntercept) + (gravity * timeToIntercept);
+            }
+            else
+            {
+                timeToIntercept = CalculateTimeToIntercept(relativePos, relativeVel, Vector3D.Zero, projectileSpeed);
+                targetLeadPos = targetPos + ((relativeVel) * timeToIntercept) + (gravity * timeToIntercept);
+            }
+            
+
+            // Correct for angular velocity
+            //targetLeadPos = RotatePosition(targetLeadPos, targetPos, deltaW);
+
             previousTargetVelocity = targetVel;
 
-            
-            program.Echo("Target velocity: " + targetVel.Length().RoundToDecimal(2).ToString() + " m/s\nRelative: " + relativeVel.Length().RoundToDecimal(2).ToString() + " m/s");
-            program.Echo("Target acceleration: " + deltaV.Length().RoundToDecimal(2).ToString() + " m/s^2");
-            program.Echo("Target distance: " + relativePos.Length().RoundToDecimal(2).ToString() + " meters");
-            program.Echo($"Time to intercept (@{projectileSpeed}m/s): " + timeToIntercept.RoundToDecimal(2).ToString() + " seconds");
+            if (doEcho)
+            {
+                LCDManager.AddText("Target velocity: " + targetVel.Length().RoundToDecimal(2).ToString() + " m/s\nRelative: " + relativeVel.Length().RoundToDecimal(2).ToString() + " m/s");
+                LCDManager.AddText("Target acceleration: " + deltaV.Length().RoundToDecimal(2).ToString() + " m/s^2");
+                LCDManager.AddText("Target distance: " + relativePos.Length().RoundToDecimal(2).ToString() + " meters");
+                LCDManager.AddText($"Time to intercept (@{projectileSpeed}m/s): " + timeToIntercept.RoundToDecimal(2).ToString() + " seconds");
 
+            }
 
             return targetLeadPos;
-            
-
+        }
+        private static Vector3D RotatePosition(Vector3D position, Vector3D center, MatrixD rotation)
+        {
+            Vector3D relativePosition = position - center;
+            Vector3D rotatedPosition = Vector3D.Transform(relativePosition, rotation);
+            return center + rotatedPosition;
         }
 
         private static double CalculateTimeToIntercept(Vector3D relativePos, Vector3D relativeVel, Vector3D targetAcc, float projectileSpeed)
