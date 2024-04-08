@@ -1,13 +1,18 @@
-﻿using Sandbox.Game.Entities;
+﻿using EmptyKeys.UserInterface.Generated.DataTemplatesContracts_Bindings;
+using IngameScript.Classes;
+using Sandbox.Game.Entities;
 using Sandbox.Game.EntityComponents;
+using Sandbox.Game.WorldEnvironment.Modules;
 using Sandbox.ModAPI.Ingame;
 using Sandbox.ModAPI.Interfaces;
 using SpaceEngineers.Game.ModAPI.Ingame;
 using System;
 using System.Collections.Generic;
 using VRage.Game;
+using VRage.Game.ModAPI.Ingame.Utilities;
 using VRage.Game.ObjectBuilders.Definitions;
 using VRageMath;
+using VRageRender.Messages;
 
 namespace IngameScript
 {
@@ -16,8 +21,6 @@ namespace IngameScript
         
         //Inconspcuous name :D
         string GroupName = "Flight Control";
-
-        
 
         float ProjectileVelocity = 2000;                //Initialize this if you only have one primary weapon, otherwise run with argument to set velocity
         float ProjectileMaxDist = 2000;                 //Maximum distance to target, used for determining if the ship should fire or not, and if it should approach the target or not
@@ -32,30 +35,37 @@ namespace IngameScript
         /// COMPLETELY AUTONOMOUS MODE ///
         bool AutonomousMode = true;                     // complete control over the ship
         float autonomousDesiredDistance = 1500;         //Distance to idle at
-        double autonomousRollPower = 0.5;               //speed to roll at
+        
+        double minAutonomousRollPower = 0.5;            //minimum roll power
+        double maxAutonomousRollPower = 2.2;            //maximum roll power
+        double autonomousRollChangeFrames = 150;        //frames to wait before changing roll power
+        double maxRollPowerToFlipRollSign = 0.7;        //maximum speed above which the ship cannot roll the dice to change the roll sign
+        float probabilityOfFlippingRollSign = 0.7f;     //probability of flipping the roll sign (assuming the ship is below the max speed to switch roll sign)
         float autonomousFireSigma = 0.9997f;            //how close to on target the ship needs to be to fire
-        static int autonomousMinFramesOnTarget = 3;     //minimum frames o be on target before firing
 
         bool SendEnemyLocation = true;                  //Send enemy location to other ships
         bool ReceiveEnemyLocation = true;               //Receive enemy location from other ships (autonomous required)
         string TaskForceTag = "TaskForceOne";           //Tag use for co ordination between ships, use a different tag if you want co ordination with a different group
 
         float FriendlyAvoidanceThreshold = 10;          //Distance to stop moving away from friendlies
-
+        float minimumGridDmensions = 100;               //minimum grid dimensions for the ship to be targeted
         //Used for maintaining distance
         float autonomouskP = 0.5f;
         float autonomouskI = 0.0f;
         float autonomouskD = 1f;
 
+        float flightDeck = 100;                         //Distance below which to try and go back up if in gravity
+
 
         /// PID CONFIG ///
-        double kP = 2400;
+        double kP = 40;
         double kI = 0;
-        double kD = 2400;
-        int cascadeCount = 10;
+        double kD = 25;
+        int cascadeCount = 1;
         double cPscaling = 1.0;
         double cIscaling = 2.0;
         double cDscaling = 2.8;
+        double integralClamp = 0.05;
 
         const double TimeStep = 1.0 / 60.0;
 
@@ -70,7 +80,7 @@ namespace IngameScript
         
 
 
-
+        
 
         //jump drive config, requires the jump drive API mod (and autonomous mode)
         bool useJumping = true;
@@ -78,9 +88,9 @@ namespace IngameScript
 
 
         bool UseRandomTransmitMessage = true;
-        const int framesPerTransmitMessage = 1200;
+        int framesPerTransmitMessage = 1200;
         List<string> splitText = new List<string>();
-        string[] TransmitMessages =
+        List<string> TransmitMessages = new List<string>()
         {
             "Do you know who ate all the doughnuts?",
             "Sometimes I dream about cheese.",
@@ -181,6 +191,11 @@ namespace IngameScript
             "Warning: all personnel should move to minimum safe distance.",
 
         };
+        Dictionary<MyDefinitionId, float> knownFireDelays = new Dictionary<MyDefinitionId, float>
+        {
+            [MyDefinitionId.Parse("SmallMissileLauncherReload/SmallRailgun")] = 0.5f,
+            [MyDefinitionId.Parse("SmallMissileLauncherReload/LargeRailgun")] = 2.0f,
+        };
 
         //No touchy below >:(
         Vector3D FriendlyAvoidanceVector = Vector3D.Zero;
@@ -194,8 +209,7 @@ namespace IngameScript
         IMyBroadcastListener CurrentlyAttackingEnemy;
         IMyBroadcastListener CoordinationPositionalData;
         ClampedIntegralPID forwardBackwardPID;
-        bool[] autonomousOnTarget = new bool[autonomousMinFramesOnTarget];
-
+        double onTargetValue = 0;
         int maximumLogLength = 20;
 
         string echoMessage = "";
@@ -213,18 +227,18 @@ namespace IngameScript
         List<IMyGyro> gyros;
         List<IMyTextPanel> panels;
         List<IMyThrust> allThrusters;
+        List<IMyGravityGenerator> allGrav;
         Thrusters thrusters;
         List<IMyRadioAntenna> antennas;
-        //make a list of railguns
-        List<IMySmallMissileLauncherReload> railguns;
-        Vector3D averageGunPos = Vector3D.Zero;
+        List<IMyUserControllableGun> gunList;
         List<IMyJumpDrive> jumpDrives;
+        List<IMyArtificialMassBlock> massBlocks;
 
+        Vector3D averageGunPos = Vector3D.Zero;
         static readonly MyDefinitionId ElectricityId = new MyDefinitionId(typeof(MyObjectBuilder_GasProperties), "Electricity");
         const float IdlePowerDraw = 0.0002f;
-        const float Epsilon = 1e-6f;
-
-
+        //const float Epsilon = 1e-6f;
+        double ep = double.Epsilon;
         MyDetectedEntityInfo target;
 
         Vector3D primaryShipAimPos = Vector3D.Zero;
@@ -232,6 +246,8 @@ namespace IngameScript
 
         ShipAim ShipAim;
         ShipAimUpdate newDetails = new ShipAimUpdate();
+        ArtificialMassManager massManager;
+        Guns guns; // guns guns guns guns
 
         string[] Args =
         {
@@ -252,8 +268,11 @@ namespace IngameScript
             RandomTurretTarget //Useful for strike runs on large targets, or sniping reactors and other critical components
         }
 
+        MyIni _ini = new MyIni();
+
         public Program()
         {
+            SyncConfig();
             Targeting.program = this;
             Turrets.program = this;
             GetGroupBlocks();
@@ -261,13 +280,212 @@ namespace IngameScript
             InitializeTurrets();
             InitializeThrusters();
             InitializeIGC();
-            
+            InitializeArtificialMass();
+            guns = new Guns(gunList, this, knownFireDelays);
 
             Runtime.UpdateFrequency = UpdateFrequency.Update1 | UpdateFrequency.Update100;
             LCDManager.InitializePanels(panels);
             LCDManager.program = this;
             LCDManager.WriteText();
         }
+        private void SyncConfig()
+        {
+            string gcs = "AimbotGeneralConfig";
+            string dcs = "AimbotDroneConfig";
+            string ccs = "AimbotCoordinationConfig";
+            string pcs = "AimbotPIDConfig";
+            string pps = "AimbotPropagandaConfig";
+            string ppl = "PropagandaTransmitMessages";
+
+            // Grab text from custom data
+            _ini.TryParse(Me.CustomData);
+
+            // Getting aimbot general config
+            GroupName = _ini.Get(gcs, "GroupName").ToString(GroupName);
+            ProjectileVelocity = _ini.Get(gcs, "ProjectileVelocity").ToSingle(ProjectileVelocity);
+            ProjectileMaxDist = _ini.Get(gcs, "ProjectileMaxDist").ToSingle(ProjectileMaxDist);
+            TurretVelocity = _ini.Get(gcs, "TurretVelocity").ToSingle(TurretVelocity);
+            rollSensitivityMultiplier = _ini.Get(gcs, "rollSensitivityMultiplier").ToSingle(rollSensitivityMultiplier);
+            maxAngular = _ini.Get(gcs, "maxAngular").ToSingle(maxAngular);
+            predictAcceleration = _ini.Get(gcs, "predictAcceleration").ToBoolean(predictAcceleration);
+            minimumGridDmensions = _ini.Get(gcs, "minimumGridDmensions").ToSingle(minimumGridDmensions);
+            bool result = Enum.TryParse(_ini.Get(gcs, "AimType").ToString("Add"), out aimType);
+            if (!result)
+            {
+                aimType = AimType.CenterOfMass;
+
+            }
+            
+            
+            OffsetVert = _ini.Get(gcs, "OffsetVert").ToSingle(OffsetVert);
+            OffsetCoax = _ini.Get(gcs, "OffsetCoax").ToSingle(OffsetCoax);
+            OffsetHoriz = _ini.Get(gcs, "OffsetHoriz").ToSingle(OffsetHoriz);
+
+
+            // setting aimbot general config
+            _ini.Set(gcs, "GroupName", GroupName);
+            _ini.Set(gcs, "ProjectileVelocity", ProjectileVelocity);
+            _ini.Set(gcs, "ProjectileMaxDist", ProjectileMaxDist);
+            _ini.Set(gcs, "TurretVelocity", TurretVelocity);
+            _ini.Set(gcs, "rollSensitivityMultiplier", rollSensitivityMultiplier);
+            _ini.Set(gcs, "maxAngular", maxAngular);
+            _ini.Set(gcs, "predictAcceleration", predictAcceleration);
+            _ini.Set(gcs, "minimumGridDmensions", minimumGridDmensions);
+            _ini.Set(gcs, "AimType", aimType.ToString());
+            string aimTypeComment = "Valid aim types are: ";
+            foreach (var type in Enum.GetValues(typeof(AimType)))
+            {
+                aimTypeComment += type.ToString() + ", ";
+            }
+            aimTypeComment = aimTypeComment.Substring(0, aimTypeComment.Length - 2) + ".";
+            _ini.SetComment(gcs, "AimType", aimTypeComment);
+            _ini.Set(gcs, "OffsetVert", OffsetVert);
+            _ini.Set(gcs, "OffsetCoax", OffsetCoax);
+            _ini.Set(gcs, "OffsetHoriz", OffsetHoriz);
+
+            _ini.SetSectionComment(gcs, "\n\nGeneral configuration for the aimbot script.\n\nEDIT HERE:");
+
+            // getting aimbot drone config
+            AutonomousMode = _ini.Get(dcs, "AutonomousMode").ToBoolean(AutonomousMode);
+            autonomousDesiredDistance = _ini.Get(dcs, "autonomousDesiredDistance").ToSingle(autonomousDesiredDistance);
+            minAutonomousRollPower = _ini.Get(dcs, "minAutonomousRollPower").ToDouble(minAutonomousRollPower);
+            maxAutonomousRollPower = _ini.Get(dcs, "maxAutonomousRollPower").ToDouble(maxAutonomousRollPower);
+            autonomousRollChangeFrames = _ini.Get(dcs, "autonomousRollChangeFrames").ToDouble(autonomousRollChangeFrames);
+            maxRollPowerToFlipRollSign = _ini.Get(dcs, "maxRollPowerToFlipRollSign").ToDouble(maxRollPowerToFlipRollSign);
+            probabilityOfFlippingRollSign = _ini.Get(dcs, "probabilityOfFlippingRollSign").ToSingle(probabilityOfFlippingRollSign);
+            autonomousFireSigma = _ini.Get(dcs, "autonomousFireSigma").ToSingle(autonomousFireSigma);
+            flightDeck = _ini.Get(dcs, "flightDeck").ToSingle(flightDeck);
+            useJumping = _ini.Get(dcs, "useJumping").ToBoolean(useJumping);
+            minDistanceToJump = _ini.Get(dcs, "minDistanceToJump").ToSingle(minDistanceToJump);
+
+            // setting aimbot drone config
+            _ini.Set(dcs, "AutonomousMode", AutonomousMode);
+            _ini.Set(dcs, "autonomousDesiredDistance", autonomousDesiredDistance);
+            _ini.Set(dcs, "minAutonomousRollPower", minAutonomousRollPower);
+            _ini.Set(dcs, "maxAutonomousRollPower", maxAutonomousRollPower);
+            _ini.Set(dcs, "autonomousRollChangeFrames", autonomousRollChangeFrames);
+            _ini.Set(dcs, "maxRollPowerToFlipRollSign", maxRollPowerToFlipRollSign);
+            _ini.Set(dcs, "probabilityOfFlippingRollSign", probabilityOfFlippingRollSign);
+            _ini.Set(dcs, "autonomousFireSigma", autonomousFireSigma);
+            _ini.Set(dcs, "flightDeck", flightDeck);
+            _ini.Set(dcs, "useJumping", useJumping);
+            _ini.Set(dcs, "minDistanceToJump", minDistanceToJump);
+
+            _ini.SetSectionComment(dcs, "\n\nDrone configuration for the aimbot script.\n\nEDIT HERE:");
+
+            // getting aimbot coordination config
+            SendEnemyLocation = _ini.Get(ccs, "SendEnemyLocation").ToBoolean(SendEnemyLocation);
+            ReceiveEnemyLocation = _ini.Get(ccs, "ReceiveEnemyLocation").ToBoolean(ReceiveEnemyLocation);
+            TaskForceTag = _ini.Get(ccs, "TaskForceTag").ToString(TaskForceTag);
+            FriendlyAvoidanceThreshold = _ini.Get(ccs, "FriendlyAvoidanceThreshold").ToSingle(FriendlyAvoidanceThreshold);
+
+            // setting aimbot coordination config
+            _ini.Set(ccs, "SendEnemyLocation", SendEnemyLocation);
+            _ini.Set(ccs, "ReceiveEnemyLocation", ReceiveEnemyLocation);
+            _ini.Set(ccs, "TaskForceTag", TaskForceTag);
+            _ini.Set(ccs, "FriendlyAvoidanceThreshold", FriendlyAvoidanceThreshold);
+
+            _ini.SetSectionComment(ccs, "\n\nCoordination configuration for the aimbot script.\n\nEDIT HERE:");
+
+            // getting aimbot PID config
+            autonomouskP = _ini.Get(pcs, "autonomouskP").ToSingle(autonomouskP);
+            autonomouskI = _ini.Get(pcs, "autonomouskI").ToSingle(autonomouskI);
+            autonomouskD = _ini.Get(pcs, "autonomouskD").ToSingle(autonomouskD);
+            kP = _ini.Get(pcs, "kP").ToDouble(kP);
+            kI = _ini.Get(pcs, "kI").ToDouble(kI);
+            kD = _ini.Get(pcs, "kD").ToDouble(kD);
+            cascadeCount = _ini.Get(pcs, "cascadeCount").ToInt32(cascadeCount);
+            cPscaling = _ini.Get(pcs, "cPscaling").ToDouble(cPscaling);
+            cIscaling = _ini.Get(pcs, "cIscaling").ToDouble(cIscaling);
+            cDscaling = _ini.Get(pcs, "cDscaling").ToDouble(cDscaling);
+            integralClamp = _ini.Get(pcs, "integralClamp").ToDouble(integralClamp);
+
+            // setting aimbot PID config
+            _ini.Set(pcs, "autonomouskP", autonomouskP);
+            _ini.Set(pcs, "autonomouskI", autonomouskI);
+            _ini.Set(pcs, "autonomouskD", autonomouskD);
+            _ini.Set(pcs, "kP", kP);
+            _ini.Set(pcs, "kI", kI);
+            _ini.Set(pcs, "kD", kD);
+            _ini.Set(pcs, "cascadeCount", cascadeCount);
+            _ini.Set(pcs, "cPscaling", cPscaling);
+            _ini.Set(pcs, "cIscaling", cIscaling);
+            _ini.Set(pcs, "cDscaling", cDscaling);
+            _ini.Set(pcs, "integralClamp", integralClamp);
+
+            _ini.SetSectionComment(pcs, "\n\nPID configuration for the aimbot script.\n\nEDIT HERE:");
+            
+            // getting aimbot propaganda config
+            PassiveRadius = _ini.Get(pps, "PassiveRadius").ToSingle(PassiveRadius);
+            TransmitRadius = _ini.Get(pps, "TransmitRadius").ToSingle(TransmitRadius);
+            TransmitMessage = _ini.Get(pps, "TransmitMessage").ToString(TransmitMessage);
+            UseRandomTransmitMessage = _ini.Get(pps, "UseRandomTransmitMessage").ToBoolean(UseRandomTransmitMessage);
+            framesPerTransmitMessage = _ini.Get(pps, "framesPerTransmitMessage").ToInt32(framesPerTransmitMessage);
+
+            // setting aimbot propaganda config
+            _ini.Set(pps, "PassiveRadius", PassiveRadius);
+            _ini.Set(pps, "TransmitRadius", TransmitRadius);
+            _ini.Set(pps, "TransmitMessage", TransmitMessage);
+            _ini.Set(pps, "UseRandomTransmitMessage", UseRandomTransmitMessage);
+            _ini.Set(pps, "framesPerTransmitMessage", framesPerTransmitMessage);
+
+            _ini.SetSectionComment(pps, "\n\nPropaganda configuration for the aimbot script.\n\nEDIT HERE:");
+
+            // Create a list of knownFireDelayKeys
+            var knownFireDelayKeys = new List<MyIniKey>();
+
+            if (_ini.ContainsSection("WeaponKnownFireDelays"))
+            {
+                _ini.GetKeys("WeaponKnownFireDelays", knownFireDelayKeys);
+
+                foreach (var key in knownFireDelayKeys)
+                {
+                    MyDefinitionId id;
+                    bool fireDelaysResult = MyDefinitionId.TryParse(key.Name, out id);
+                    if (!fireDelaysResult)
+                    {
+                        continue;
+                    }
+                    knownFireDelays[id] = _ini.Get("WeaponKnownFireDelays", key.Name).ToSingle(0);
+                }
+            }
+            knownFireDelayKeys.Clear();
+
+            foreach (var pair in knownFireDelays)
+            {
+                _ini.Set("WeaponKnownFireDelays", ConvertDefinitionIdToString(pair.Key), pair.Value);
+            }
+            _ini.SetSectionComment("WeaponKnownFireDelays", "\n\n\nKnown fire delays for existing weapons (by default it is just the railguns.\nIf mods change these (or on the off chance keen changes them), you will\nneed to change them to match. You can also add values for modded\nweapons.\n\nEDIT HERE:");
+
+
+            // Create a list of transmission messages
+            var propagandaTransmitMessages = new List<MyIniKey>();
+
+            if (_ini.ContainsSection(ppl))
+            {
+                _ini.GetKeys(ppl, propagandaTransmitMessages);
+                TransmitMessages.Clear();
+
+                foreach (var key in propagandaTransmitMessages)
+                {
+                    TransmitMessages.Add(_ini.Get(ppl, key.Name).ToString());
+                }
+            }
+
+            for (int i = 0; i < TransmitMessages.Count; i++)
+            {
+                string message = TransmitMessages[i];
+                _ini.Set(ppl, i.ToString(), message);
+            }
+            _ini.SetSectionComment(ppl, "\n\nPropaganda messages, go wild\n\nEDIT HERE:");
+            Me.CustomData = _ini.ToString();
+        }
+
+        private string ConvertDefinitionIdToString(MyDefinitionId id)
+        {
+            return id.ToString().Substring("MyObjectBuilder_".Length);
+        }
+
 
         private void GetGroupBlocks()
         {
@@ -277,9 +495,12 @@ namespace IngameScript
             controllers = new List<IMyShipController>();
             panels = new List<IMyTextPanel>();
             allThrusters = new List<IMyThrust>();
-            railguns = new List<IMySmallMissileLauncherReload>();
+            allGrav = new List<IMyGravityGenerator>();
+            gunList = new List<IMyUserControllableGun>();
             jumpDrives = new List<IMyJumpDrive>();
             antennas = new List<IMyRadioAntenna>();
+            massBlocks = new List<IMyArtificialMassBlock>();
+
             bool groupFound = false;
 
             var groups = new List<IMyBlockGroup>();
@@ -296,9 +517,11 @@ namespace IngameScript
                     group.GetBlocksOfType(controllers);
                     group.GetBlocksOfType(panels);
                     group.GetBlocksOfType(allThrusters);
-                    group.GetBlocksOfType(railguns);
+                    group.GetBlocksOfType(allGrav);
+                    group.GetBlocksOfType(gunList);
                     group.GetBlocksOfType(antennas);
                     group.GetBlocksOfType(jumpDrives);
+                    group.GetBlocksOfType(massBlocks);
                 }
             }
             if (!groupFound)
@@ -326,9 +549,16 @@ namespace IngameScript
             aimDetails.cIscaling = cIscaling;
             aimDetails.cDscaling = cDscaling;
             aimDetails.cascadeCount = cascadeCount;
-            aimDetails.autonomousRollPower = autonomousRollPower;
+            aimDetails.integralClamp = integralClamp;
+            aimDetails.maxRollPowerToFlipRollSign = maxRollPowerToFlipRollSign;
+            aimDetails.minAutonomousRollPower = minAutonomousRollPower;
+            aimDetails.maxAutonomousRollPower = maxAutonomousRollPower;
+            aimDetails.autonomousRollChangeFrames = autonomousRollChangeFrames;
+            aimDetails.probabilityOfFlippingRollSign = probabilityOfFlippingRollSign;
             aimDetails.AutonomousMode = AutonomousMode;
             aimDetails.leadAcceleration = predictAcceleration;
+            aimDetails.rng = rng;
+            aimDetails.flightDeck = flightDeck;
             ShipAim = new ShipAim(aimDetails, gyros);
             forwardBackwardPID = new ClampedIntegralPID(autonomouskP, autonomouskI, autonomouskD, TimeStep, -maxAngular, maxAngular);
             if (controllers.Count > 0)
@@ -339,8 +569,6 @@ namespace IngameScript
             {
                 gyro.GyroOverride = false;
             }
-            int spinDirection = rng.Next(0, 2) * 2 - 1;
-            autonomousRollPower *= spinDirection;
         }
 
         private void InitializeTurrets()
@@ -351,11 +579,11 @@ namespace IngameScript
 
         public void InitializeThrusters()
         {
-            if (AutonomousMode)
-            {
+            //if (AutonomousMode)
+            //{
 
-                thrusters = new Thrusters(allThrusters, currentController);
-            }
+                thrusters = new Thrusters(allThrusters, currentController, allGrav, this);
+            //}
         }
 
         private void InitializeIGC()
@@ -365,10 +593,13 @@ namespace IngameScript
             CoordinationPositionalData = IGC.RegisterBroadcastListener(CoordinationPositionalDataTag);
         }
 
+        private void InitializeArtificialMass()
+        {
+            massManager = new ArtificialMassManager(massBlocks, GridTerminalSystem, this, allGrav);
+        }
         //main loop entrypoint
         public void Main(string argument, UpdateType updateType)
         {
-
             LCDManager.AddText("Aim Type: " + aimType.ToString());
             if ((updateType & (UpdateType.Trigger | UpdateType.Terminal)) != 0)
             {
@@ -524,7 +755,22 @@ namespace IngameScript
             turretTargets.Clear();
             GetTurretTargets(turrets, turretControllers, ref turretTargets);
             primaryShipAimPos = GetShipTarget(out hasTarget, ref target, turretTargets);
-            
+
+            SendLocationalData();
+            GetIGCMessages();
+            UpdateGuns();
+            UpdateJumpDrives();
+            UpdateShipAim();
+            Turrets.UpdateTurretAim(currentController, turretTargets);
+            massManager.Update(currentController.CenterOfMass, hasTarget, AutonomousMode, currentController.MoveIndicator);
+            UpdateShipThrust();
+            CoordinateAttack();
+            UpdateAntennas();
+            UpdateLog();
+        }
+
+        private void SendLocationalData()
+        {
             if (hasTarget)
             {
                 if (SendEnemyLocation)
@@ -534,7 +780,7 @@ namespace IngameScript
                     int arrayIndex = -1;
                     for (int i = 0; i < TransmitMessage.Length; i++)
                     {
-                        if (i % 50  == 0)
+                        if (i % 50 == 0)
                         {
                             arrayIndex++;
                             splitText.Add("");
@@ -544,15 +790,15 @@ namespace IngameScript
                     for (int i = 0; i < antennas.Count; i++)
                     {
                         string text = " ";
-                        try { text = splitText[i];}
+                        try { text = splitText[i]; }
 
                         catch { }
-                        
+
                         IMyRadioAntenna antenna = antennas[i];
                         antenna.Radius = TransmitRadius;
                         antenna.HudText = text;
                     }
-                    
+
                     IGC.SendBroadcastMessage<Vector3D>(TaskForceTag + EnemyLocationTag, primaryShipAimPos, TransmissionDistance.TransmissionDistanceMax);
 
 
@@ -571,7 +817,7 @@ namespace IngameScript
                     List<Vector3D> points = FibonacciSphereGenerator.Generate(primaryShipAimPos, autonomousDesiredDistance, shipIds.Count + 1);
 
                     LCDManager.AddText(points.Count.ToString());
-                    
+
                     for (int i = 0; i < shipIds.Count; i++)
                     {
                         long sendee = shipIds[i];
@@ -589,7 +835,7 @@ namespace IngameScript
                         antenna.Radius = PassiveRadius;
                     }
                 }
-                
+
                 while (EnemyLocator.HasPendingMessage)
                 {
                     MyIGCMessage sender = EnemyLocator.AcceptMessage();
@@ -620,15 +866,6 @@ namespace IngameScript
                     jumpPos = (Vector3D)position.Data;
                 }
             }
-            GetIGCMessages();
-            UpdateGuns();
-            UpdateJumpDrives();
-            UpdateShipAim();
-            Turrets.UpdateTurretAim(currentController, turretTargets);
-            UpdateShipThrust();
-            CoordinateAttack();
-            UpdateAntennas();
-            UpdateLog();
         }
         List<MyIGCMessage> jumpPositionRequests = new List<MyIGCMessage>();
         List<MyIGCMessage> recievedJumpPositions = new List<MyIGCMessage>();
@@ -658,7 +895,7 @@ namespace IngameScript
                 {
                     framesSinceLastTransmitMessage = 0;
 
-                    int random = rng.Next(0, TransmitMessages.Length);
+                    int random = rng.Next(0, TransmitMessages.Count);
                     TransmitMessage = TransmitMessages[random];
                 }
             }
@@ -799,6 +1036,9 @@ namespace IngameScript
 
             ShipAim.CheckForTargets(newDetails);
         }
+
+        
+        bool thrustingUp = true;
         void UpdateShipThrust()
         {
             if (AutonomousMode)
@@ -809,133 +1049,103 @@ namespace IngameScript
                     //get the distance to the target, if less than max projectile range, don't thrust up
                     if (Vector3D.Distance(currentController.GetPosition(), primaryShipAimPos) < ProjectileMaxDist)
                     {
-                        thrusters.SetThrustInDirection(1, thrusterDir.Up);
+                        if (!thrustingUp)
+                        {
+                            thrusters.SetThrustInAxis(1, thrusterAxis.UpDown);
+                            thrustingUp = true;
+                        }
                     }
-                    else
+                    else if (thrustingUp)
                     {
-                        thrusters.SetThrustInDirection(0, thrusterDir.Up);
+                        thrusters.SetThrustInAxis(0, thrusterAxis.UpDown);
+                        thrustingUp = false;
                     }
                     //get distance from target
                     float distance = (float)Vector3D.Distance(currentController.GetPosition(), primaryShipAimPos);
 
                     float error = distance - autonomousDesiredDistance;
                     forwardBackwardPID.Control(error);
-                    thrusters.SetThrustInAxis((float)forwardBackwardPID.Value, thrusterAxis.ForwardBackward);
+                    thrusters.SetThrustInAxis((float)(forwardBackwardPID.Value * onTargetValue * -1), thrusterAxis.ForwardBackward);
 
                     float sideThrustMul = Vector3.Dot(currentController.WorldMatrix.Left, FriendlyAvoidanceVector) * 1000;
-                    thrusters.SetThrustInAxis(-sideThrustMul, thrusterAxis.LeftRight);
-                    float upThrustMul = Vector3.Dot(currentController.WorldMatrix.Up, FriendlyAvoidanceVector) * 1000;
-                    thrusters.SetThrustInDirection(upThrustMul, thrusterDir.Down);
+                    thrusters.SetThrustInAxis(sideThrustMul, thrusterAxis.LeftRight);
+                    //float upThrustMul = Vector3.Dot(currentController.WorldMatrix.Up, FriendlyAvoidanceVector) * 1000;
+                    //thrusters.SetThrustInAxis(upThrustMul, thrusterAxis.UpDown);
 
                 }
                 else
                 {
-                    currentController.DampenersOverride = true;
-                    thrusters.SetThrustInDirection(0, thrusterDir.Up);
-                    thrusters.SetThrustInDirection(0, thrusterDir.Down);
-                    thrusters.SetThrustInDirection(0, thrusterDir.Left);
-                    thrusters.SetThrustInDirection(0, thrusterDir.Right);
-                    thrusters.SetThrustInDirection(0, thrusterDir.Forward);
-                    thrusters.SetThrustInDirection(0, thrusterDir.Backward);
+                    if (thrustingUp)
+                    {
+                        thrusters.SetThrustInAxis(0, thrusterAxis.UpDown);
+                        thrusters.SetThrustInAxis(0, thrusterAxis.ForwardBackward);
+                        thrusters.SetThrustInAxis(0, thrusterAxis.LeftRight);
+                        thrustingUp = false;
+                        thrusters.SetNeutralGravity();
+                    }
+                    PlayerControlledThrust();
                 }
-
-                
             }
-            
+            else
+            {
+                PlayerControlledThrust();
+            }
+
         }
-        List<IMySmallMissileLauncherReload> tempRailguns = new List<IMySmallMissileLauncherReload>();
+        bool stoppedThrusting = true;
+        private void PlayerControlledThrust()
+        {
+            currentController.DampenersOverride = true;
+            Vector3 moveIndicator = currentController.MoveIndicator;
+            if (Math.Abs(moveIndicator.X + moveIndicator.Y + moveIndicator.Z) > 0)
+            {
+                thrusters.SetThrustInAxis(moveIndicator.X, thrusterAxis.LeftRight);
+                thrusters.SetThrustInAxis(moveIndicator.Y, thrusterAxis.UpDown);
+                thrusters.SetThrustInAxis(moveIndicator.Z, thrusterAxis.ForwardBackward);
+                stoppedThrusting = false;
+            }
+            else if (stoppedThrusting == false)
+            {
+                thrusters.SetThrustInAxis(0, thrusterAxis.LeftRight);
+                thrusters.SetThrustInAxis(0, thrusterAxis.UpDown);
+                thrusters.SetThrustInAxis(0, thrusterAxis.ForwardBackward);
+                thrusters.SetNeutralGravity();
+                stoppedThrusting = true;
+            }
+        }
+
         void UpdateGuns()
         {
-            int activeRailguns = 0;
             averageGunPos = Vector3D.Zero;
-            tempRailguns.Clear();
-            foreach (IMySmallMissileLauncherReload railgun in railguns)
-            {
-                tempRailguns.Add(railgun);
-            }
-            foreach (IMySmallMissileLauncherReload railgun in tempRailguns)
-            {
-                if (railgun == null || railgun.Closed)
-                {
-                    railguns.Remove(railgun);
-                    continue;
-                }
-                if (railgun.Components.Get<MyResourceSinkComponent>().MaxRequiredInputByType(ElectricityId) < (IdlePowerDraw + Epsilon) && railgun.Enabled && railgun.IsFunctional)
-                {
-                    averageGunPos += railgun.GetPosition();
-                    activeRailguns++;
-                }
-
-
-            }
-            if (activeRailguns != 0)
-            {
-                averageGunPos /= activeRailguns;
-            }
-            LCDManager.AddText("Active railguns: " + activeRailguns.ToString());
-
+            int activeGuns = guns.AreAvailable();
+            LCDManager.AddText("Active guns: " + activeGuns.ToString());
+            averageGunPos = guns.GetAimingReferencePos(currentController.GetPosition());
 
             if (AutonomousMode && !jumping)
             {
-                //get a vector from the ship to the target
-                Vector3D shipToTarget = (primaryShipAimPos - currentController.GetPosition());
-                
-                Vector3D shipToTargetNormal = Vector3D.Normalize(shipToTarget);
-                Vector3D forward = currentController.WorldMatrix.Forward;
-                bool onTarget = Vector3D.Dot(shipToTargetNormal, forward) > autonomousFireSigma;
-                
-                //remove the oldest value
-                for (int i = 0; i < autonomousOnTarget.Length - 1; i++)
+                if (hasTarget)
                 {
-                    autonomousOnTarget[i] = autonomousOnTarget[i + 1];
-                }
-                //add the new value
-                autonomousOnTarget[autonomousOnTarget.Length - 1] = onTarget;
+                    //get a vector from the ship to the target
+                    Vector3D shipToTarget = (Data.aimPos - averageGunPos); // HAAAAAAAAAAAAAACKS
 
-                //check if all values are true
-                onTarget = true;
-                foreach (bool value in autonomousOnTarget)
-                {
-                    if (!value)
+                    Vector3D shipToTargetNormal = Vector3D.Normalize(shipToTarget);
+                    Vector3D forward = currentController.WorldMatrix.Forward;
+                    onTargetValue = Vector3D.Dot(shipToTargetNormal, forward);
+                    LCDManager.AddText("On target value: " + onTargetValue.ToString());
+                    if (shipToTarget.Length() < ProjectileMaxDist && onTargetValue > autonomousFireSigma)
                     {
-                        onTarget = false;
+                        guns.Fire();
                     }
-                }
-                if (onTarget && shipToTarget.Length() < ProjectileMaxDist)
-                {
-                    LCDManager.AddText("Firing!");
-                    tempRailguns.Clear();
-                    foreach (IMySmallMissileLauncherReload railgun in railguns)
+                    else
                     {
-                        tempRailguns.Add(railgun);
-                    }
-                    foreach (IMySmallMissileLauncherReload railgun in tempRailguns)
-                    {
-                        if (railgun == null)
-                        {
-                            railguns.Remove(railgun);
-                            continue;
-                        }
-                        railgun.Shoot = true;
+                        guns.Cancel();
                     }
                 }
                 else
                 {
-                    tempRailguns.Clear();
-                    foreach (IMySmallMissileLauncherReload railgun in railguns)
-                    {
-                        tempRailguns.Add(railgun);
-                    }
-                    foreach (IMySmallMissileLauncherReload railgun in tempRailguns)
-                    {
-                        if (railgun == null)
-                        {
-                            railguns.Remove(railgun);
-                            continue;
-                        }
-                        railgun.Shoot = false;
-                    }
+                    guns.Standby();
                 }
+                
             }
             
         }
@@ -999,12 +1209,24 @@ namespace IngameScript
             
             foreach(IMyLargeTurretBase turret in turrets)
             {
-                targets.Add(turret, turret.GetTargetedEntity());
+                MyDetectedEntityInfo myDetectedEntityInfo = turret.GetTargetedEntity();
+                BoundingBoxD boundingBox = myDetectedEntityInfo.BoundingBox;
+                if (boundingBox.Extents.LengthSquared() > minimumGridDmensions)
+                {
+                    targets.Add(turret, myDetectedEntityInfo);
+                }
+
             }
 
             foreach (IMyTurretControlBlock turret in turretControllers)
             {
-                targets.Add(turret, turret.GetTargetedEntity());
+                MyDetectedEntityInfo myDetectedEntityInfo = turret.GetTargetedEntity();
+                BoundingBoxD boundingBox = myDetectedEntityInfo.BoundingBox;
+                if (boundingBox.Extents.LengthSquared() > 100)
+                {
+                    targets.Add(turret, myDetectedEntityInfo);
+                }
+
             }
         }
 
@@ -1051,6 +1273,7 @@ namespace IngameScript
                                 if (target.HitPosition != null)
                                 {
                                     result = true;
+                                    currentTarget = target;
                                     return (Vector3D)target.HitPosition;
                                 }
                                 break;
