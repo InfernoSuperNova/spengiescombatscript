@@ -47,7 +47,7 @@ namespace IngameScript
             if (target.HitPosition != null)
             {
                 Vector3D tempVelocity = new Vector3D(Data.prevTargetVelocity.X, Data.prevTargetVelocity.Y, Data.prevTargetVelocity.Z);
-                return Targeting.GetTargetLeadPosition((Vector3D)target.HitPosition, target.Velocity, MatrixD.Zero, turret.GetPosition(), shipVelocity, projectileVelocity, TimeStep, ref tempVelocity, false, false);
+                return Targeting.GetTargetLeadPosition((Vector3D)target.HitPosition, target.Velocity, turret.GetPosition(), shipVelocity, projectileVelocity, TimeStep, ref tempVelocity, false, false);
             }
             return Vector3D.Zero;
         }
