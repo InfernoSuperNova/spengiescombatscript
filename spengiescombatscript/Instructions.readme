@@ -20,10 +20,22 @@
 
 
         TBA:
-        Individual weapon aim and fire (like that one turret script I made)
+        Individual weapon aim and fire (like that one CIWS script I made)
         LiDAR based targeting
 
 
         To set up:
-        Place all of your gyroscopes, targeting turrets (artillery etc), and a seat in a group. 
-        OPTIONAL: Add a LCD to the group to display targeting information, add railguns and thrusters to the group for AI controlled spin to win and firing
+        Place required blocks into a group.
+
+        Required blocks:
+        Gyroscopes
+        Turrets / Custom Turret Controllers
+        Controller of some sort
+
+        Optional blocks:
+        Guns (For calculating the aimpoint on the ship, and for AI to fire)
+        Thrusters (For AI to use)
+        Gravity generators and artificial mass blocks (has a built in gravity drive controller + balancer)
+        Antennas (For propaganda and inter drone communication (target sharing))
+        Jump Drives (if you have the Jump Drive API mod installed)
+        LCD (FYI)
