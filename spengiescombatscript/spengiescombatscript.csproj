@@ -37,7 +37,7 @@
     <ErrorReport>prompt</ErrorReport>
     <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
     <Prefer32Bit>true</Prefer32Bit>
-    <LangVersion>6</LangVersion>
+    <LangVersion>7.0</LangVersion>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="netstandard" />
@@ -53,8 +53,10 @@
   <Import Project="MDK/MDK.options.props" />
   <Import Project="MDK/MDK.paths.props" Condition="exists('MDK/MDK.paths.props')" />
   <ItemGroup>
+    <Compile Include="ArtificialMassManager.cs" />
     <Compile Include="Data.cs" />
     <Compile Include="FibonacciSphereGenerator.cs" />
+    <Compile Include="Guns.cs" />
     <Compile Include="Helpers.cs" />
     <Compile Include="LCDManager.cs" />
     <Compile Include="MDK\Bootstrapper.cs" />
