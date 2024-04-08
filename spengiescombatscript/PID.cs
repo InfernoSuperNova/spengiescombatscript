@@ -39,6 +39,12 @@ namespace IngameScript
             return errorSum + currentError * timeStep;
         }
 
+        public double GetErrorSum()
+        {
+            return _errorSum;
+        }
+
+
         public double Control(double error)
         {
             //Compute derivative term
