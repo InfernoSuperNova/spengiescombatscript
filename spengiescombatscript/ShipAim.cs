@@ -8,6 +8,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using VRage;
 using VRage.Collections;
@@ -29,9 +30,14 @@ namespace IngameScript
         public float OffsetHoriz;
         public float rollSensitivityMultiplier;
         public float maxAngular;
+        public float flightDeck;
         public double TimeStep;
         public bool AutonomousMode;
-        public double autonomousRollPower;
+        public double maxRollPowerToFlipRollSign;
+        public double minAutonomousRollPower;
+        public double maxAutonomousRollPower;
+        public double autonomousRollChangeFrames;
+        public double probabilityOfFlippingRollSign;
         public double kP;
         public double kI;
         public double kD;
@@ -39,7 +45,9 @@ namespace IngameScript
         public double cIscaling;
         public double cDscaling;
         public int cascadeCount;
+        public double integralClamp;
         public bool leadAcceleration;
+        public Random rng;
     }
     public struct ShipAimUpdate
     {
@@ -64,6 +72,7 @@ namespace IngameScript
 
         List<ClampedIntegralPID> pitches;
         List<ClampedIntegralPID> yaws;
+        List<ClampedIntegralPID> rolls;
         public bool active = true;
         public Vector3D previousTargetVelocity;
         //variables to assign continuously
@@ -77,15 +86,19 @@ namespace IngameScript
         public Vector3D averageGunPos = Vector3D.Zero;
         public MatrixD angularVelocity = MatrixD.Zero;
         public MatrixD previousRotation = MatrixD.Zero;
-        
+        private double currentRollPower = 0.5;
+        private double currentRollSign = 1;
+        private int timeSincelastRollChange = 0;
         public ShipAim(ShipAimConfig config, List<IMyGyro> gyros)
         {
+
             pitches = new List<ClampedIntegralPID>();
             yaws = new List<ClampedIntegralPID>();
+            rolls = new List<ClampedIntegralPID>();
             this.config = config;
             this.gyros = gyros;
-            pitch = new ClampedIntegralPID(config.kP, config.kI, config.kD, config.TimeStep, -config.maxAngular, config.maxAngular);
-            yaw = new ClampedIntegralPID(config.kP, config.kI, config.kD, config.TimeStep, -config.maxAngular, config.maxAngular);
+            pitch = new ClampedIntegralPID(config.kP, config.kI, config.kD, config.TimeStep, -config.integralClamp, config.integralClamp);
+            yaw = new ClampedIntegralPID(config.kP, config.kI, config.kD, config.TimeStep, -config.integralClamp, config.integralClamp);
 
             for (int i = 0; i < config.cascadeCount; i++)
             {
@@ -94,8 +107,9 @@ namespace IngameScript
                 double integralGain = config.kI / Math.Pow(config.cIscaling, i);
                 double derivativeGain = config.kD / Math.Pow(config.cDscaling, i);
 
-                pitches.Add(new ClampedIntegralPID(proportionalGain, integralGain, derivativeGain, config.TimeStep, -config.maxAngular, config.maxAngular));
-                yaws.Add(new ClampedIntegralPID(proportionalGain, integralGain, derivativeGain, config.TimeStep, -config.maxAngular, config.maxAngular));
+                pitches.Add(new ClampedIntegralPID(proportionalGain, integralGain, derivativeGain, config.TimeStep, -config.integralClamp, config.integralClamp));
+                yaws.Add(new ClampedIntegralPID(proportionalGain, integralGain, derivativeGain, config.TimeStep, -config.integralClamp, config.integralClamp));
+                rolls.Add(new ClampedIntegralPID(proportionalGain, integralGain, derivativeGain, config.TimeStep, -config.integralClamp, config.integralClamp));
             }
 
 
@@ -132,13 +146,44 @@ namespace IngameScript
                 }
                 Data.prevTargetVelocity = new Vector3D(previousTargetVelocity.X, previousTargetVelocity.Y, previousTargetVelocity.Z);
                 angularVelocity = previousRotation - target.Orientation;
-                Vector3D leadPos = Targeting.GetTargetLeadPosition(aimPos, target.Velocity, angularVelocity, referencePosition, currentController.CubeGrid.LinearVelocity, ProjectileVelocity, config.TimeStep, ref previousTargetVelocity, true, leadAcceleration);
+
+                Vector3D leadPos = Targeting.GetTargetLeadPosition(aimPos, target.Velocity, referencePosition, currentController.CubeGrid.LinearVelocity, ProjectileVelocity, config.TimeStep, ref previousTargetVelocity, true, leadAcceleration);
                 previousRotation = target.Orientation;
                 double roll = currentController.RollIndicator;
                 if (config.AutonomousMode)
                 {
-                    roll = config.autonomousRollPower;
-                    config.program.Echo(roll.ToString());
+                    // Get altitude
+                    double altitude;
+                    bool isInGravity = currentController.TryGetPlanetElevation(MyPlanetElevation.Surface, out altitude);
+                    
+                    if (isInGravity) LCDManager.AddText("Altitude: " + altitude.ToString());
+                    if (isInGravity && altitude < config.flightDeck)
+                    {
+                        // handles angling the ship up when below the flight deck
+                        Vector3D gravityDirection = currentController.GetNaturalGravity().Normalized();
+                        
+                        Vector3D upDirection = currentController.WorldMatrix.Up;
+                        double rollAngleChange = Math.Asin(Vector3D.Dot(currentController.WorldMatrix.Left, gravityDirection)) * 10;
+                        roll = ControlPIDList(rolls, rollAngleChange);
+                    }
+                    else
+                    {
+                        ControlPIDList(rolls, 0); // hacky way to reset the derivative term
+                        if (timeSincelastRollChange > config.autonomousRollChangeFrames)
+                        {
+                            if (config.maxRollPowerToFlipRollSign > currentRollPower && config.rng.NextDouble() < config.probabilityOfFlippingRollSign)
+                            {
+                                currentRollSign *= -1;
+                            }
+                            currentRollPower = config.rng.NextDouble() * (config.maxAutonomousRollPower - config.minAutonomousRollPower) + config.minAutonomousRollPower;
+                            timeSincelastRollChange = 0;
+                        }
+                        roll = currentRollPower * currentRollSign;
+                        config.program.Echo("Roll speed:");
+                        config.program.Echo(roll.ToString());
+                        timeSincelastRollChange++;
+                    }
+
                 }
 
                 Vector3D worldDirection = Vector3D.Normalize(leadPos - referencePosition);
@@ -167,6 +212,7 @@ namespace IngameScript
             for (int i = 0; i < pidList.Count; i++)
             {
                 output += pidList[i].Control(error);
+                LCDManager.AddText(pidList[i].GetErrorSum().ToString());
             }
             return output;
         }
@@ -181,8 +227,8 @@ namespace IngameScript
             {
                 var waxis = Vector3D.Cross(currentController.WorldMatrix.Forward, desiredGlobalFwdNormalized);
                 Vector3D axis = Vector3D.TransformNormal(waxis, MatrixD.Transpose(currentController.WorldMatrix));
-                double x = ControlPIDList(pitches, -(Math.Sign(axis.X) * Math.Pow(axis.X, 2)));
-                double y = ControlPIDList(yaws, -(Math.Sign(axis.Y) * Math.Pow(axis.Y, 2)));
+                double x = ControlPIDList(pitches, -axis.X);
+                double y = ControlPIDList(yaws, -axis.Y);
 
 
                 gp = (float)MathHelper.Clamp(x, -config.maxAngular, config.maxAngular);
@@ -195,11 +241,10 @@ namespace IngameScript
             }
             if (Math.Abs(gy) + Math.Abs(gp) > config.maxAngular)
             {
-                double adjust = config.maxAngular / (Math.Abs(gy) + Math.Abs(gp));
+                double adjust = config.maxAngular / (Math.Abs(gy) + Math.Abs(gp) + Math.Abs(gr));
                 gy *= adjust;
                 gp *= adjust;
-                LCDManager.AddText("Adjusting");
-                gr = 0;
+                gr *= adjust;
             }
             const double sigma = 0.000009;
             if (Math.Abs(gp) < sigma) gp = 0;
@@ -212,33 +257,44 @@ namespace IngameScript
         {
             var rotationVec = new Vector3D(pitchSpeed, yawSpeed, rollSpeed);
             var relativeRotationVec = Vector3D.TransformNormal(rotationVec, worldMatrix);
-            if (masterGyro == null || masterGyro.Closed)
+            //if (masterGyro == null || masterGyro.Closed)
+            //{
+            //    masterGyro = GetNewGyro(gyroList);
+            //    if (masterGyro == null)
+            //    {
+            //        return;
+            //    }
+            //}
+            //if (!masterGyro.IsFunctional || !masterGyro.IsWorking || !masterGyro.Enabled)
+            //{
+            //    masterGyro.Pitch = 0;
+            //    masterGyro.Yaw = 0;
+            //    masterGyro.Roll = 0;
+            //    masterGyro.GyroOverride = false;
+            //    masterGyro = GetNewGyro(gyroList);
+            //}
+            //if (masterGyro == null)
+            //{
+            //    LCDManager.AddText("No functional gyroscopes found!");
+            //    return;
+            //}
+            //var transformedRotationVec = Vector3D.TransformNormal(relativeRotationVec, Matrix.Transpose(masterGyro.WorldMatrix));
+            //LCDManager.AddText("Using gyroscope : " + masterGyro.CustomName);
+            //masterGyro.Pitch = (float)transformedRotationVec.X;
+            //masterGyro.Yaw = (float)transformedRotationVec.Y;
+            //masterGyro.Roll = (float)transformedRotationVec.Z;
+            //masterGyro.GyroOverride = true;
+            foreach (IMyGyro gyro in gyroList)
             {
-                masterGyro = GetNewGyro(gyroList);
-                if (masterGyro == null)
+                if (gyro.IsFunctional && gyro.IsWorking && gyro.Enabled && !gyro.Closed)
                 {
-                    return;
+                    var transformedRotationVec = Vector3D.TransformNormal(relativeRotationVec, MatrixD.Transpose(gyro.WorldMatrix));
+                    gyro.Pitch = (float)transformedRotationVec.X;
+                    gyro.Yaw = (float)transformedRotationVec.Y;
+                    gyro.Roll = (float)transformedRotationVec.Z;
+                    gyro.GyroOverride = true;
                 }
             }
-            if (!masterGyro.IsFunctional || !masterGyro.IsWorking || !masterGyro.Enabled)
-            {
-                masterGyro.Pitch = 0;
-                masterGyro.Yaw = 0;
-                masterGyro.Roll = 0;
-                masterGyro.GyroOverride = false;
-                masterGyro = GetNewGyro(gyroList);
-            }
-            if (masterGyro == null)
-            {
-                LCDManager.AddText("No functional gyroscopes found!");
-                return;
-            }
-            var transformedRotationVec = Vector3D.TransformNormal(relativeRotationVec, Matrix.Transpose(masterGyro.WorldMatrix));
-            LCDManager.AddText("Using gyroscope : " + masterGyro.CustomName);
-            masterGyro.Pitch = (float)transformedRotationVec.X;
-            masterGyro.Yaw = (float)transformedRotationVec.Y;
-            masterGyro.Roll = (float)transformedRotationVec.Z;
-            masterGyro.GyroOverride = true;
         }
         private IMyGyro GetNewGyro(List<IMyGyro> gyroList)
         {
