@@ -13,30 +13,31 @@ namespace IngameScript.Classes
 
     public class Guns
     {
-        static readonly MyDefinitionId ElectricityId = new MyDefinitionId(typeof(MyObjectBuilder_GasProperties), "Electricity");
         Dictionary<MyDefinitionId, float> knownFireDelays;
 
         const float IdlePowerDraw = 0.002f;
 
-        private List<IMyUserControllableGun> guns;
-        private Dictionary<IMyUserControllableGun, bool> availableGuns;
+        private List<Gun> guns;
+        private Dictionary<Gun, bool> availableGuns;
         private MyGridProgram program;
-        public Guns(List<IMyUserControllableGun> guns, MyGridProgram program, Dictionary<MyDefinitionId, float> knownFireDelays)
+        private float secondDifferenceToGroupGunFiring = 0;
+        public Guns(List<IMyUserControllableGun> guns, MyGridProgram program, Dictionary<MyDefinitionId, float> knownFireDelays, float framesToGroupGuns)
         {
-            availableGuns = new Dictionary<IMyUserControllableGun, bool>();
-            this.guns = new List<IMyUserControllableGun>();
+            secondDifferenceToGroupGunFiring = framesToGroupGuns / 60;
+            availableGuns = new Dictionary<Gun, bool>();
+            this.guns = new List<Gun>();
             this.knownFireDelays = knownFireDelays;
             foreach (var gun in guns)
             {
                 IMyLargeTurretBase isTurret = gun as IMyLargeTurretBase;
                 if (isTurret == null)
                 {
-                    this.guns.Add(gun);
+                    this.guns.Add(new Gun(gun, knownFireDelays));
                 }
             }
             foreach (var gun in this.guns)
             {
-                availableGuns[gun] = false;
+                availableGuns[gun] = gun.Available;
             }
             this.program = program;
         }
@@ -47,15 +48,13 @@ namespace IngameScript.Classes
             int availableGuns = 0;
             for (int i = guns.Count - 1; i >= 0; i--)
             {
-                IMyUserControllableGun gun = guns[i];
+                Gun gun = guns[i];
                 if (gun == null || gun.Closed)
                 {
                     guns.RemoveAt(i); continue;
                 }
-                bool IsFunctional = gun.IsFunctional;
-                bool IsReadyToFire = gun.Components.Get<MyResourceSinkComponent>().MaxRequiredInputByType(ElectricityId) < (IdlePowerDraw + float.Epsilon);
-
-                bool isGunAvailable = IsFunctional && IsReadyToFire;
+                gun.Tick();
+                bool isGunAvailable = gun.Available;
                 availableGuns += isGunAvailable ? 1 : 0;
                 this.availableGuns[gun] = isGunAvailable;
             }
@@ -64,22 +63,40 @@ namespace IngameScript.Classes
 
         public Vector3D GetAimingReferencePos(Vector3D fallback)
         {
+            float lowestTimeToFire = GetLowestTimeToFire();
             Vector3D averagePos = Vector3D.Zero;
             int activeGunCount = 0;
+            int chargingGunCount = 0;
             foreach (var gun in guns)
             {
                 if (availableGuns[gun])
                 {
+                    if (gun.GetTimeToFire() - secondDifferenceToGroupGunFiring > lowestTimeToFire) { chargingGunCount++; continue; } ;
                     Vector3D GunPos = gun.GetPosition();
                     if (double.IsNaN(GunPos.X)) continue;
                     averagePos += gun.GetPosition();
                     activeGunCount++;
                 }
             }
+            LCDManager.AddText("    Pre charging: " + chargingGunCount);
+            LCDManager.AddText("    Used for aiming: " + activeGunCount);
 
             if (activeGunCount == 0) return fallback;
-
             return averagePos / activeGunCount;
+        }
+
+        public float GetLowestTimeToFire()
+        {
+            float lowestTimeToFire = float.MaxValue;
+            foreach (var gun in guns)
+            {
+                if (gun.Available)
+                {
+                    float timeToFire = gun.GetTimeToFire();
+                    lowestTimeToFire = Math.Min(lowestTimeToFire, timeToFire);
+                }
+            }
+            return lowestTimeToFire;
         }
 
         public void Fire()
