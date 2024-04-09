@@ -179,8 +179,7 @@ namespace IngameScript
                             timeSincelastRollChange = 0;
                         }
                         roll = currentRollPower * currentRollSign;
-                        config.program.Echo("Roll speed:");
-                        config.program.Echo(roll.ToString());
+                        LCDManager.AddText("Roll speed: " + roll.ToString());
                         timeSincelastRollChange++;
                     }
 
@@ -212,7 +211,6 @@ namespace IngameScript
             for (int i = 0; i < pidList.Count; i++)
             {
                 output += pidList[i].Control(error);
-                LCDManager.AddText(pidList[i].GetErrorSum().ToString());
             }
             return output;
         }
