@@ -56,6 +56,7 @@
     <Compile Include="ArtificialMassManager.cs" />
     <Compile Include="Data.cs" />
     <Compile Include="FibonacciSphereGenerator.cs" />
+    <Compile Include="Gun.cs" />
     <Compile Include="Guns.cs" />
     <Compile Include="Helpers.cs" />
     <Compile Include="LCDManager.cs" />
