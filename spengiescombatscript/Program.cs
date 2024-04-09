@@ -1303,6 +1303,8 @@ namespace IngameScript
             averageGunPos = Vector3D.Zero;
             int activeGuns = guns.AreAvailable();
             LCDManager.AddText("Active guns: " + activeGuns.ToString());
+            if (!hasTarget) { guns.Standby(); return; };
+            
             averageGunPos = guns.GetAimingReferencePos(currentController.GetPosition());
 
             if (AutonomousMode && !jumping)
