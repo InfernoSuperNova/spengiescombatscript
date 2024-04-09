@@ -8,6 +8,7 @@ using Sandbox.ModAPI.Interfaces;
 using SpaceEngineers.Game.ModAPI.Ingame;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using VRage.Game;
 using VRage.Game.ModAPI.Ingame.Utilities;
 using VRage.Game.ObjectBuilders.Definitions;
@@ -89,9 +90,11 @@ namespace IngameScript
 
         bool UseRandomTransmitMessage = true;
         int framesPerTransmitMessage = 1200;
-        List<string> splitText = new List<string>();
-        List<string> TransmitMessages = new List<string>()
+        int transmitMessageHoldTimeFrames = 300;
+        List<string> randomQuotes = new List<string>()
         {
+                        // Random quotes
+            "I'm sorry, Dave. I'm afraid I can't do that.",
             "Do you know who ate all the doughnuts?",
             "Sometimes I dream about cheese.",
             "Why do we all have to wear these ridiculous ties?",
@@ -280,6 +283,11 @@ namespace IngameScript
 
         };
 
+        List<string> LibertyPrimeQuotes = new List<string>()
+        {
+
+
+            // Liberty Prime quotes
             "America will never fall to Communist invasion.",
             "Commencing tactical assessment. Red Chinese threat detected.",
             "Democracy is non-negotiable.",
@@ -374,7 +382,9 @@ namespace IngameScript
             "Tactical assessment: Breach compound to restore democracy.",
             "Warning: all personnel should move to minimum safe distance.",
 
+
         };
+        List<string> TransmitMessages = new List<string>();
         Dictionary<MyDefinitionId, float> knownFireDelays = new Dictionary<MyDefinitionId, float>
         {
             [MyDefinitionId.Parse("SmallMissileLauncherReload/SmallRailgun")] = 0.5f,
@@ -464,13 +474,17 @@ namespace IngameScript
             InitializeTurrets();
             InitializeThrusters();
             InitializeIGC();
+            InitializeAntennas();
             InitializeArtificialMass();
-            guns = new Guns(gunList, this, knownFireDelays);
+            guns = new Guns(gunList, this, knownFireDelays, framesToGroupGuns);
 
             Runtime.UpdateFrequency = UpdateFrequency.Update1 | UpdateFrequency.Update100;
             LCDManager.InitializePanels(panels);
             LCDManager.program = this;
             LCDManager.WriteText();
+            //TransmitMessages.AddRange(randomQuotes);
+            //TransmitMessages.AddRange(gladosQuotes);
+            TransmitMessages.AddRange(LibertyPrimeQuotes);
         }
         private void SyncConfig()
         {
@@ -606,6 +620,7 @@ namespace IngameScript
             TransmitMessage = _ini.Get(pps, "TransmitMessage").ToString(TransmitMessage);
             UseRandomTransmitMessage = _ini.Get(pps, "UseRandomTransmitMessage").ToBoolean(UseRandomTransmitMessage);
             framesPerTransmitMessage = _ini.Get(pps, "framesPerTransmitMessage").ToInt32(framesPerTransmitMessage);
+            transmitMessageHoldTimeFrames = _ini.Get(pps, "transmitMessageHoldTimeFrames").ToInt32(transmitMessageHoldTimeFrames);
 
             // setting aimbot propaganda config
             _ini.Set(pps, "PassiveRadius", PassiveRadius);
@@ -613,6 +628,7 @@ namespace IngameScript
             _ini.Set(pps, "TransmitMessage", TransmitMessage);
             _ini.Set(pps, "UseRandomTransmitMessage", UseRandomTransmitMessage);
             _ini.Set(pps, "framesPerTransmitMessage", framesPerTransmitMessage);
+            _ini.Set(pps, "transmitMessageHoldTimeFrames", transmitMessageHoldTimeFrames);
 
             _ini.SetSectionComment(pps, "\n\nPropaganda configuration for the aimbot script.\n\nEDIT HERE:");
 
@@ -656,7 +672,10 @@ namespace IngameScript
                     TransmitMessages.Add(_ini.Get(ppl, key.Name).ToString());
                 }
             }
-
+            if (!_ini.ContainsSection(ppl))
+            {
+                _ini.AddSection(ppl);
+            }
             for (int i = 0; i < TransmitMessages.Count; i++)
             {
                 string message = TransmitMessages[i];
