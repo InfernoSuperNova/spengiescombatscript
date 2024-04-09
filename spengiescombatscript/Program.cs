@@ -28,7 +28,7 @@ namespace IngameScript
         float rollSensitivityMultiplier = 1;            //Increase if spinning too slowly, decrease if spi   nning too quickly
         float maxAngular = 30.0f;                       //Max angular velocity in RPM, set to 60 for small gridId and 30 for large gridId (or something less if you wish for slower seek)
         bool predictAcceleration = false;
-   
+        float framesToGroupGuns = 5;                    //Frame leeway to consider guns as part of the same volley
         AimType aimType = AimType.CenterOfMass;         //Valid options are CenterOfMass, TurretAverage, and RandomTurretTarget. Can also be set with argument
 
 
@@ -499,7 +499,7 @@ namespace IngameScript
                 aimType = AimType.CenterOfMass;
 
             }
-            
+            framesToGroupGuns = _ini.Get(gcs, "framesToGroupGuns").ToSingle(framesToGroupGuns);
             
             OffsetVert = _ini.Get(gcs, "OffsetVert").ToSingle(OffsetVert);
             OffsetCoax = _ini.Get(gcs, "OffsetCoax").ToSingle(OffsetCoax);
@@ -523,6 +523,7 @@ namespace IngameScript
             }
             aimTypeComment = aimTypeComment.Substring(0, aimTypeComment.Length - 2) + ".";
             _ini.SetComment(gcs, "AimType", aimTypeComment);
+            _ini.Set(gcs, "framesToGroupGuns", framesToGroupGuns);
             _ini.Set(gcs, "OffsetVert", OffsetVert);
             _ini.Set(gcs, "OffsetCoax", OffsetCoax);
             _ini.Set(gcs, "OffsetHoriz", OffsetHoriz);
