@@ -796,7 +796,14 @@ namespace IngameScript
             CurrentlyAttackingEnemy = IGC.RegisterBroadcastListener(CurrentlyAttackingEnemyTag);
             CoordinationPositionalData = IGC.RegisterBroadcastListener(CoordinationPositionalDataTag);
         }
-
+        private void InitializeAntennas()
+        {
+            string factionTag = Me.GetOwnerFactionTag();
+            int length = factionTag.Length + 1; // +1 for the period between the tag and the antenna display.
+            // Antennas can display up to 64 characters, so we need to modify the max based on the faction tag so that the script can be aware.
+            maxMessageLength = 60 - length;
+            // Except we do 62 because we're also gonna do newline shenanigans
+        }
         private void InitializeArtificialMass()
         {
             massManager = new ArtificialMassManager(massBlocks, GridTerminalSystem, this, allGrav);
@@ -972,37 +979,12 @@ namespace IngameScript
             UpdateAntennas();
             UpdateLog();
         }
-
         private void SendLocationalData()
         {
             if (hasTarget)
             {
                 if (SendEnemyLocation)
                 {
-                    //Split transmit message text up into 64 charcter chunks, feed to antennas
-                    splitText.Clear();
-                    int arrayIndex = -1;
-                    for (int i = 0; i < TransmitMessage.Length; i++)
-                    {
-                        if (i % 50 == 0)
-                        {
-                            arrayIndex++;
-                            splitText.Add("");
-                        }
-                        splitText[arrayIndex] += TransmitMessage[i];
-                    }
-                    for (int i = 0; i < antennas.Count; i++)
-                    {
-                        string text = " ";
-                        try { text = splitText[i]; }
-
-                        catch { }
-
-                        IMyRadioAntenna antenna = antennas[i];
-                        antenna.Radius = TransmitRadius;
-                        antenna.HudText = text;
-                    }
-
                     IGC.SendBroadcastMessage<Vector3D>(TaskForceTag + EnemyLocationTag, primaryShipAimPos, TransmissionDistance.TransmissionDistanceMax);
 
 
@@ -1090,10 +1072,22 @@ namespace IngameScript
                 }
             }
         }
+        int maxMessageLength = 0;
         void UpdateAntennas()
         {
+            for (int i = antennas.Count - 1; i >= 0; i--)
+            {
+                IMyRadioAntenna antenna = antennas[i];
+                if (antenna.Closed)
+                {
+                    antennas.RemoveAt(i);
+                }
+            }
+
+            antennas.ForEach(antenna => antenna.Radius = PassiveRadius);
             if (UseRandomTransmitMessage && hasTarget)
             {
+                antennas.ForEach(antenna => antenna.Radius = TransmitRadius);
                 framesSinceLastTransmitMessage++;
                 if (framesSinceLastTransmitMessage > framesPerTransmitMessage)
                 {
@@ -1101,7 +1095,24 @@ namespace IngameScript
 
                     int random = rng.Next(0, TransmitMessages.Count);
                     TransmitMessage = TransmitMessages[random];
+                    antennas.ForEach(antenna => antenna.Enabled = false);
+                    antennas[0].Enabled = true;
                 }
+                if (TransmitMessage.Length < maxMessageLength) { antennas.ForEach(antenna => antenna.HudText = "\n" + TransmitMessage + " \n\n") ; return; }
+                int offset = 0;
+                float normalizedValue = GetNormalizedValue(framesSinceLastTransmitMessage, transmitMessageHoldTimeFrames, framesPerTransmitMessage - transmitMessageHoldTimeFrames);
+                offset = (int)(normalizedValue * (TransmitMessage.Length - maxMessageLength));
+                offset = Math.Min(offset, TransmitMessage.Length);
+                LCDManager.AddText(offset.ToString());
+                LCDManager.AddText(normalizedValue.ToString());
+                string actualTransmitMessage = "\n" + TransmitMessage.Substring(offset, maxMessageLength) + "\n\n";
+                antennas.ForEach(antenna => antenna.HudText = actualTransmitMessage);
+
+            }
+            else if (!hasTarget)
+            {
+                antennas.ForEach(antenna => antenna.HudText = "");
+                framesSinceLastTransmitMessage = framesPerTransmitMessage;
             }
         }
         IMyJumpDrive primaryJumpDrive;
@@ -1588,6 +1599,18 @@ namespace IngameScript
         private void Log(string toAdd)
         {
             echoMessage = toAdd + "\n" + echoMessage;
+        }
+        // Add the following function to the Program class
+
+        private float GetNormalizedValue(float value, float minValue, float maxValue)
+        {
+            // Ensure the value is within the specified range
+            value = Math.Max(minValue, Math.Min(maxValue, value));
+
+            // Calculate the normalized value between 0 and 1
+            float normalizedValue = (value - minValue) / (maxValue - minValue);
+
+            return normalizedValue;
         }
 
 
