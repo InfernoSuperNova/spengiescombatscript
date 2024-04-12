@@ -436,7 +436,7 @@ namespace IngameScript
 
         Vector3D primaryShipAimPos = Vector3D.Zero;
         bool hasTarget = false;
-
+        List<long> deadTargets = new List<long>();
         ShipAim ShipAim;
         ShipAimUpdate newDetails = new ShipAimUpdate();
         ArtificialMassManager massManager;
@@ -475,18 +475,20 @@ namespace IngameScript
             InitializeIGC();
             InitializeAntennas();
             InitializeArtificialMass();
-            guns = new Guns(gunList, this, knownFireDelays, framesToGroupGuns);
+            guns = new Guns(gunList, this, knownFireDelays, framesToGroupGuns, doVolley, volleyDelayFrames);
 
             Runtime.UpdateFrequency = UpdateFrequency.Update1 | UpdateFrequency.Update100;
             LCDManager.InitializePanels(panels);
             LCDManager.program = this;
             LCDManager.WriteText();
-            //TransmitMessages.AddRange(randomQuotes);
-            //TransmitMessages.AddRange(gladosQuotes);
-            TransmitMessages.AddRange(LibertyPrimeQuotes);
         }
         private void SyncConfig()
         {
+            TransmitMessages.AddRange(randomQuotes);
+            TransmitMessages.AddRange(gladosQuotes);
+            TransmitMessages.AddRange(LibertyPrimeQuotes);
+
+
             string gcs = "AimbotGeneralConfig";
             string dcs = "AimbotDroneConfig";
             string ccs = "AimbotCoordinationConfig";
@@ -505,7 +507,7 @@ namespace IngameScript
             rollSensitivityMultiplier = _ini.Get(gcs, "rollSensitivityMultiplier").ToSingle(rollSensitivityMultiplier);
             maxAngular = _ini.Get(gcs, "maxAngular").ToSingle(maxAngular);
             predictAcceleration = _ini.Get(gcs, "predictAcceleration").ToBoolean(predictAcceleration);
-            minimumGridDmensions = _ini.Get(gcs, "minimumGridDmensions").ToSingle(minimumGridDmensions);
+            minimumGridDimensions = _ini.Get(gcs, "minimumGridDimensions").ToSingle(minimumGridDimensions);
             bool result = Enum.TryParse(_ini.Get(gcs, "AimType").ToString("Add"), out aimType);
             if (!result)
             {
@@ -670,6 +672,7 @@ namespace IngameScript
                 {
                     TransmitMessages.Add(_ini.Get(ppl, key.Name).ToString());
                 }
+                if (TransmitMessages.Count == 0) TransmitMessages.Add("");
             }
             if (!_ini.ContainsSection(ppl))
             {
@@ -1084,7 +1087,7 @@ namespace IngameScript
                     antennas.RemoveAt(i);
                 }
             }
-
+            
             antennas.ForEach(antenna => antenna.Radius = PassiveRadius);
             if (UseRandomTransmitMessage && hasTarget)
             {
@@ -1092,12 +1095,6 @@ namespace IngameScript
                 framesSinceLastTransmitMessage++;
                 if (framesSinceLastTransmitMessage > framesPerTransmitMessage)
                 {
-                    framesSinceLastTransmitMessage = 0;
-
-                    int random = rng.Next(0, TransmitMessages.Count);
-                    TransmitMessage = TransmitMessages[random];
-                    antennas.ForEach(antenna => antenna.Enabled = false);
-                    antennas[0].Enabled = true;
                 }
                 if (TransmitMessage.Length < maxMessageLength) { antennas.ForEach(antenna => antenna.HudText = "\n" + TransmitMessage + " \n\n") ; return; }
                 int offset = 0;
@@ -1108,7 +1105,6 @@ namespace IngameScript
                 LCDManager.AddText(normalizedValue.ToString());
                 string actualTransmitMessage = "\n" + TransmitMessage.Substring(offset, maxMessageLength) + "\n\n";
                 antennas.ForEach(antenna => antenna.HudText = actualTransmitMessage);
-
             }
             else if (!hasTarget)
             {
@@ -1432,7 +1428,8 @@ namespace IngameScript
             {
                 MyDetectedEntityInfo myDetectedEntityInfo = turret.GetTargetedEntity();
                 BoundingBoxD boundingBox = myDetectedEntityInfo.BoundingBox;
-                if (boundingBox.Extents.LengthSquared() > minimumGridDmensions)
+                LCDManager.AddText("Bounding box: " + boundingBox.Extents.LengthSquared());
+                if (boundingBox.Extents.LengthSquared() > minimumGridDimensions)
                 {
                     targets.Add(turret, myDetectedEntityInfo);
                 }
@@ -1443,7 +1440,7 @@ namespace IngameScript
             {
                 MyDetectedEntityInfo myDetectedEntityInfo = turret.GetTargetedEntity();
                 BoundingBoxD boundingBox = myDetectedEntityInfo.BoundingBox;
-                if (boundingBox.Extents.LengthSquared() > 100)
+                if (boundingBox.Extents.LengthSquared() > minimumGridDimensions)
                 {
                     targets.Add(turret, myDetectedEntityInfo);
                 }

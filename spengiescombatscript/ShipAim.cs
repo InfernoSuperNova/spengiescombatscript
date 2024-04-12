@@ -84,6 +84,7 @@ namespace IngameScript
         private double currentRollPower = 0.5;
         private double currentRollSign = 1;
         private int timeSincelastRollChange = 0;
+        public int framesWithTargetDriftingAwayFromShip = 0;
         public ShipAim(ShipAimConfig config, List<IMyGyro> gyros)
         {
 
@@ -113,12 +114,28 @@ namespace IngameScript
             UpdateDerivative();
             if (hasTarget && aim)
             {
+                Vector3D referencePosition = currentController.GetPosition();
+                if (config.AutonomousMode)
+                {
+                    Vector3D targetAcceleration = (target.Velocity - previousTargetVelocity) / config.TimeStep;
+                    Vector3D meToTarget = aimPos - referencePosition;
+                    float dot = Vector3.Dot(meToTarget, target.Velocity);
+                    if (targetAcceleration.LengthSquared() < 0.1 && dot > 0)
+                    {
+                        framesWithTargetDriftingAwayFromShip++;
+                    }
+                    else
+                    {
+                        framesWithTargetDriftingAwayFromShip = 0;
+                    }
+                    LCDManager.AddText("Frames with target drifting away: " + framesWithTargetDriftingAwayFromShip.ToString());
+                }
                 active = true;
                 LCDManager.AddText("Fuck shit up, captain!");
                 //get reference pos
                 MatrixD refOrientation = currentController.WorldMatrix;
                 MatrixD ShipMatrix = currentController.CubeGrid.WorldMatrix;
-                Vector3D referencePosition = currentController.GetPosition();
+                
                 //Offset reference
                 referencePosition += refOrientation.Up * config.OffsetVert;
                 referencePosition += refOrientation.Forward * config.OffsetCoax;
@@ -132,26 +149,20 @@ namespace IngameScript
 
                 Vector3D leadPos = Targeting.GetTargetLeadPosition(aimPos, target.Velocity, referencePosition, currentController.CubeGrid.LinearVelocity, ProjectileVelocity, config.TimeStep, ref previousTargetVelocity, true, leadAcceleration);
                 previousRotation = target.Orientation;
-                double roll = currentController.RollIndicator;
+                double rollValue = currentController.RollIndicator;
                 if (config.AutonomousMode)
                 {
-                    // Get altitude
-                    double altitude;
-                    bool isInGravity = currentController.TryGetPlanetElevation(MyPlanetElevation.Surface, out altitude);
-                    
+
+                    double altitude = 0;
+                    bool isInGravity = GetGravity(ref altitude);
                     if (isInGravity) LCDManager.AddText("Altitude: " + altitude.ToString());
                     if (isInGravity && altitude < config.flightDeck)
                     {
-                        // handles angling the ship up when below the flight deck
-                        Vector3D gravityDirection = currentController.GetNaturalGravity().Normalized();
-                        
-                        Vector3D upDirection = currentController.WorldMatrix.Up;
-                        double rollAngleChange = Math.Asin(Vector3D.Dot(currentController.WorldMatrix.Left, gravityDirection)) * 10;
-                        roll = ControlPIDList(rolls, rollAngleChange);
+                        rollValue = AngleRollToGravity();
                     }
                     else
                     {
-                        ControlPIDList(rolls, 0); // hacky way to reset the derivative term
+                        roll.Control(0); // hacky way to reset the integral and derivative term
                         if (timeSincelastRollChange > config.autonomousRollChangeFrames)
                         {
                             if (config.maxRollPowerToFlipRollSign > currentRollPower && config.rng.NextDouble() < config.probabilityOfFlippingRollSign)
@@ -161,30 +172,57 @@ namespace IngameScript
                             currentRollPower = config.rng.NextDouble() * (config.maxAutonomousRollPower - config.minAutonomousRollPower) + config.minAutonomousRollPower;
                             timeSincelastRollChange = 0;
                         }
-                        roll = currentRollPower * currentRollSign;
-                        LCDManager.AddText("Roll speed: " + roll.ToString());
+                        rollValue = currentRollPower * currentRollSign;
+                        LCDManager.AddText("Roll speed: " + rollValue.ToString());
                         timeSincelastRollChange++;
                     }
 
                 }
 
                 Vector3D worldDirection = Vector3D.Normalize(leadPos - referencePosition);
-                Rotate(worldDirection, roll);
+                
+                Rotate(worldDirection, rollValue);
             }
-            else
+            else // not aiming
             {
-
-                LCDManager.AddText("All systems nominal");
-                if (active)
+                if (config.AutonomousMode)
                 {
-                    active = false;
-                    foreach (IMyGyro gyro in gyros)
+                    double altitude = 0;
+                    bool isInGravity = GetGravity(ref altitude);
+                    if (isInGravity) LCDManager.AddText("Altitude: " + altitude.ToString());
+                    if (isInGravity && altitude < config.flightDeck)
                     {
-                        gyro.GyroOverride = false;
+                        double roll = AngleRollToGravity();
+                        // get a vector perpendicular to gravity to level out the pitch
+                        Vector3D desiredGlobalFwdNormalized = -Vector3D.Normalize(Vector3D.Cross(currentController.GetNaturalGravity(), currentController.WorldMatrix.Right));
+                        LCDManager.AddText(Vector3D.Dot(currentController.WorldMatrix.Forward, desiredGlobalFwdNormalized).ToString());
+                        if (Vector3D.Dot(currentController.WorldMatrix.Forward, desiredGlobalFwdNormalized) < 0.9999)
+                        {
+                            LCDManager.AddText("Rolling to gravity");
+                            if (active == false)
+                            {
+                                gyros.ForEach(g => g.GyroOverride = true);
+                                active = true;
+                            }
+                            Rotate(desiredGlobalFwdNormalized, roll);
+                        }
+                        else
+                        {
+                            NeutralizeRoll();
+                        }
                     }
+                    else
+                    {
+                        NeutralizeRoll();
+                    }
+                        
                 }
-
+                else
+                {
+                    NeutralizeRoll();
+                }
             }
+        }
 
         private void UpdateDerivative()
         {
@@ -200,16 +238,33 @@ namespace IngameScript
             yaw.Kd = newKD * config.kD;
 
         }
+        private bool GetGravity(ref double altitude)
+        {
+            // Get altitude
+            return currentController.TryGetPlanetElevation(MyPlanetElevation.Surface, out altitude);
         }
 
-        private double ControlPIDList(List<ClampedIntegralPID> pidList, double error)
+        private void NeutralizeRoll()
         {
-            double output = 0;
-            for (int i = 0; i < pidList.Count; i++)
+            LCDManager.AddText("All systems nominal");
+            if (active)
             {
-                output += pidList[i].Control(error);
+                active = false;
+                foreach (IMyGyro gyro in gyros)
+                {
+                    gyro.GyroOverride = false;
+                }
             }
-            return output;
+        }
+
+        private double AngleRollToGravity()
+        {
+            // handles angling the ship up when below the flight deck
+            Vector3D gravityDirection = currentController.GetNaturalGravity().Normalized();
+
+            Vector3D upDirection = currentController.WorldMatrix.Up;
+            double rollAngleChange = Math.Asin(Vector3D.Dot(currentController.WorldMatrix.Left, gravityDirection)) * 10;
+            return roll.Control(rollAngleChange);
         }
         private void Rotate(Vector3D desiredGlobalFwdNormalized, double roll)
         {
