@@ -18,11 +18,19 @@ namespace IngameScript.Classes
         const float IdlePowerDraw = 0.002f;
 
         private List<Gun> guns;
+        private Gun activeGun;
         private Dictionary<Gun, bool> availableGuns;
         private MyGridProgram program;
         private float secondDifferenceToGroupGunFiring = 0;
-        public Guns(List<IMyUserControllableGun> guns, MyGridProgram program, Dictionary<MyDefinitionId, float> knownFireDelays, float framesToGroupGuns)
+
+        public bool volley;
+        public int volleyDelayFrames;
+        private int currentVolleyFrame = 0;
+        private bool currentGunIsVolleyFiring = false;
+
+        public Guns(List<IMyUserControllableGun> guns, MyGridProgram program, Dictionary<MyDefinitionId, float> knownFireDelays, float framesToGroupGuns, bool doVolley, int volleyDelayFrames)
         {
+
             secondDifferenceToGroupGunFiring = framesToGroupGuns / 60;
             availableGuns = new Dictionary<Gun, bool>();
             this.guns = new List<Gun>();
@@ -39,7 +47,14 @@ namespace IngameScript.Classes
             {
                 availableGuns[gun] = gun.Available;
             }
+            volley = doVolley;
+            this.volleyDelayFrames = (int)volleyDelayFrames;
+
             this.program = program;
+            if (volley)
+            {
+                activeGun = this.guns[0];
+            }
         }
 
 
@@ -58,9 +73,26 @@ namespace IngameScript.Classes
                 availableGuns += isGunAvailable ? 1 : 0;
                 this.availableGuns[gun] = isGunAvailable;
             }
+            if (volley && currentGunIsVolleyFiring) TickActiveGun();
             return availableGuns;
         }
 
+        private void TickActiveGun()
+        {
+            currentVolleyFrame++;
+            if (currentVolleyFrame >= volleyDelayFrames)
+            {
+                currentVolleyFrame = 0;
+                currentGunIsVolleyFiring = false;
+                IncrementActiveGun();
+            }
+        }
+
+        private void IncrementActiveGun()
+        {
+            int currentIndex = guns.IndexOf(activeGun);
+            activeGun = guns[(currentIndex + 1) % guns.Count];
+        }
         public Vector3D GetAimingReferencePos(Vector3D fallback)
         {
             float lowestTimeToFire = GetLowestTimeToFire();
@@ -101,12 +133,24 @@ namespace IngameScript.Classes
 
         public void Fire()
         {
-            foreach (var gun in guns)
+            if (volley)
             {
-                if (availableGuns[gun])
+                if (availableGuns[activeGun])
                 {
-                    gun.Enabled = true;
-                    gun.Shoot = true;
+                    activeGun.Enabled = true;
+                    activeGun.Shoot = true;
+                    currentGunIsVolleyFiring = true;
+                }
+            }
+            else
+            {
+                foreach (var gun in guns)
+                {
+                    if (availableGuns[gun])
+                    {
+                        gun.Enabled = true;
+                        gun.Shoot = true;
+                    }
                 }
             }
         }

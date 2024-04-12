@@ -49,7 +49,7 @@ namespace IngameScript
         string TaskForceTag = "TaskForceOne";           //Tag use for co ordination between ships, use a different tag if you want co ordination with a different group
 
         float FriendlyAvoidanceThreshold = 10;          //Distance to stop moving away from friendlies
-        float minimumGridDmensions = 100;               //minimum grid dimensions for the ship to be targeted
+        float minimumGridDimensions = 100;               //minimum grid dimensions for the ship to be targeted
         //Used for maintaining distance
         float autonomouskP = 0.5f;
         float autonomouskI = 0.0f;
@@ -62,10 +62,7 @@ namespace IngameScript
         double kP = 40;
         double kI = 0;
         double kD = 25;
-        int cascadeCount = 1;
-        double cPscaling = 1.0;
-        double cIscaling = 2.0;
-        double cDscaling = 2.8;
+        double derivativeNonLinearity = 2;
         double integralClamp = 0.05;
 
         const double TimeStep = 1.0 / 60.0;
@@ -519,6 +516,8 @@ namespace IngameScript
             OffsetCoax = _ini.Get(gcs, "OffsetCoax").ToSingle(OffsetCoax);
             OffsetHoriz = _ini.Get(gcs, "OffsetHoriz").ToSingle(OffsetHoriz);
 
+            doVolley = _ini.Get(gcs, "doVolley").ToBoolean(doVolley);
+            volleyDelayFrames = _ini.Get(gcs, "volleyDelayFrames").ToInt32(volleyDelayFrames);
 
             // setting aimbot general config
             _ini.Set(gcs, "GroupName", GroupName);
@@ -528,7 +527,7 @@ namespace IngameScript
             _ini.Set(gcs, "rollSensitivityMultiplier", rollSensitivityMultiplier);
             _ini.Set(gcs, "maxAngular", maxAngular);
             _ini.Set(gcs, "predictAcceleration", predictAcceleration);
-            _ini.Set(gcs, "minimumGridDmensions", minimumGridDmensions);
+            _ini.Set(gcs, "minimumGridDimensions", minimumGridDimensions);
             _ini.Set(gcs, "AimType", aimType.ToString());
             string aimTypeComment = "Valid aim types are: ";
             foreach (var type in Enum.GetValues(typeof(AimType)))
@@ -541,6 +540,8 @@ namespace IngameScript
             _ini.Set(gcs, "OffsetVert", OffsetVert);
             _ini.Set(gcs, "OffsetCoax", OffsetCoax);
             _ini.Set(gcs, "OffsetHoriz", OffsetHoriz);
+            _ini.Set(gcs, "doVolley", doVolley);
+            _ini.Set(gcs, "volleyDelayFrames", volleyDelayFrames);
 
             _ini.SetSectionComment(gcs, "\n\nGeneral configuration for the aimbot script.\n\nEDIT HERE:");
 

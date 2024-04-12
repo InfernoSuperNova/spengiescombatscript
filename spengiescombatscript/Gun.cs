@@ -34,8 +34,9 @@ namespace IngameScript
 
         public void Tick()
         {
-            if (Available && Firing)
+            if (Available && Shoot)
             {
+                actualGun.ShootOnce();
                 TimeSpentFiring = Math.Min(TimeSpentFiring + (1f/60f), FireDelay);
             }
             else
@@ -50,11 +51,7 @@ namespace IngameScript
 
             set { actualGun.Enabled = value; }
         }
-        public bool Shoot
-        {
-            get { return actualGun.Shoot; }
-            set { actualGun.Shoot = value; }
-        }
+        public bool Shoot = false;
         public float PowerDraw
         {
             get { return actualGun.Components.Get<MyResourceSinkComponent>().MaxRequiredInputByType(ElectricityId); }
