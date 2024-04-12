@@ -56,7 +56,7 @@ namespace IngameScript
         float autonomouskD = 1f;
 
         float flightDeck = 100;                         //Distance below which to try and go back up if in gravity
-
+        int maxFramesToFollowDriftingTarget = 600;
 
         /// PID CONFIG ///
         double kP = 40;
@@ -1491,6 +1491,7 @@ namespace IngameScript
                                 if (target.HitPosition != null)
                                 {
                                     result = true;
+                                    if (ShipAim.framesWithTargetDriftingAwayFromShip > maxFramesToFollowDriftingTarget) result = false;
                                     currentTarget = target;
                                     return (Vector3D)target.HitPosition;
                                 }
@@ -1520,6 +1521,7 @@ namespace IngameScript
                     if (pair.Value > max)
                     {
                         result = true;
+                        ShipAim.framesWithTargetDriftingAwayFromShip = 0;
                         max = pair.Value;
                         finalTarget = pair.Key;
                     }
@@ -1529,13 +1531,13 @@ namespace IngameScript
             
             if (result)
             {
-
                 currentTarget = finalTarget;
                 //Get the average position of the turret targets
                 return AverageTurretTarget(finalTarget, targets);
             }
             else
             {
+                ShipAim.framesWithTargetDriftingAwayFromShip = 0;
                 return Vector3D.Zero;
             }    
         }
