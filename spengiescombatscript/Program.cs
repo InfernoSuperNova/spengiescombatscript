@@ -1260,12 +1260,14 @@ namespace IngameScript
 
         
         bool thrustingUp = true;
+        bool usingOtherThrust = true;
         void UpdateShipThrust()
         {
             if (AutonomousMode)
             {
                 if (hasTarget && !jumping)
                 {
+                    usingOtherThrust = true;
                     currentController.DampenersOverride = false;
                     //get the distance to the target, if less than max projectile range, don't thrust up
                     if (Vector3D.Distance(currentController.GetPosition(), primaryShipAimPos) < ProjectileMaxDist)
@@ -1296,12 +1298,13 @@ namespace IngameScript
                 }
                 else
                 {
-                    if (thrustingUp)
+                    if (thrustingUp || usingOtherThrust)
                     {
                         thrusters.SetThrustInAxis(0, thrusterAxis.UpDown);
                         thrusters.SetThrustInAxis(0, thrusterAxis.ForwardBackward);
                         thrusters.SetThrustInAxis(0, thrusterAxis.LeftRight);
                         thrustingUp = false;
+                        usingOtherThrust = false;
                         thrusters.SetNeutralGravity();
                     }
                     PlayerControlledThrust();
