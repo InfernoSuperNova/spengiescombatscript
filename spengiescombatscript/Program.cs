@@ -1076,6 +1076,11 @@ namespace IngameScript
         int maxMessageLength = 0;
         void UpdateAntennas()
         {
+            if (antennas.Count == 0)
+            {
+                return;
+            }
+            
             for (int i = antennas.Count - 1; i >= 0; i--)
             {
                 IMyRadioAntenna antenna = antennas[i];
