@@ -28,7 +28,7 @@ namespace IngameScript
         float TurretVelocity = 500.0f;                  //velocity that the turrets use for turret aim overriding
         float rollSensitivityMultiplier = 1;            //Increase if spinning too slowly, decrease if spi   nning too quickly
         float maxAngular = 30.0f;                       //Max angular velocity in RPM, set to 60 for small gridId and 30 for large gridId (or something less if you wish for slower seek)
-        bool predictAcceleration = false;
+        bool predictAcceleration = true;
         float framesToGroupGuns = 5;                    //Frame leeway to consider guns as part of the same volley
         AimType aimType = AimType.CenterOfMass;         //Valid options are CenterOfMass, TurretAverage, and RandomTurretTarget. Can also be set with argument
 
