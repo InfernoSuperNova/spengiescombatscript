@@ -1,4 +1,4 @@
-﻿using Sandbox.Game.EntityComponents;
+using Sandbox.Game.EntityComponents;
 using Sandbox.ModAPI.Ingame;
 using Sandbox.ModAPI.Interfaces;
 using SpaceEngineers.Game.Entities.Blocks;
@@ -41,10 +41,7 @@ namespace IngameScript
         public double kP;
         public double kI;
         public double kD;
-        public double cPscaling;
-        public double cIscaling;
-        public double cDscaling;
-        public int cascadeCount;
+        public double derivativeNonLinearity;
         public double integralClamp;
         public bool leadAcceleration;
         public Random rng;
@@ -69,10 +66,8 @@ namespace IngameScript
         //variables to determine here
         ClampedIntegralPID pitch;
         ClampedIntegralPID yaw;
+        ClampedIntegralPID roll;
 
-        List<ClampedIntegralPID> pitches;
-        List<ClampedIntegralPID> yaws;
-        List<ClampedIntegralPID> rolls;
         public bool active = true;
         public Vector3D previousTargetVelocity;
         //variables to assign continuously
@@ -92,25 +87,12 @@ namespace IngameScript
         public ShipAim(ShipAimConfig config, List<IMyGyro> gyros)
         {
 
-            pitches = new List<ClampedIntegralPID>();
-            yaws = new List<ClampedIntegralPID>();
-            rolls = new List<ClampedIntegralPID>();
             this.config = config;
             this.gyros = gyros;
             pitch = new ClampedIntegralPID(config.kP, config.kI, config.kD, config.TimeStep, -config.integralClamp, config.integralClamp);
             yaw = new ClampedIntegralPID(config.kP, config.kI, config.kD, config.TimeStep, -config.integralClamp, config.integralClamp);
+            roll = new ClampedIntegralPID(config.kP, config.kI, config.kD, config.TimeStep, -config.integralClamp, config.integralClamp);
 
-            for (int i = 0; i < config.cascadeCount; i++)
-            {
-
-                double proportionalGain = config.kP / Math.Pow(config.cPscaling, i);
-                double integralGain = config.kI / Math.Pow(config.cIscaling, i);
-                double derivativeGain = config.kD / Math.Pow(config.cDscaling, i);
-
-                pitches.Add(new ClampedIntegralPID(proportionalGain, integralGain, derivativeGain, config.TimeStep, -config.integralClamp, config.integralClamp));
-                yaws.Add(new ClampedIntegralPID(proportionalGain, integralGain, derivativeGain, config.TimeStep, -config.integralClamp, config.integralClamp));
-                rolls.Add(new ClampedIntegralPID(proportionalGain, integralGain, derivativeGain, config.TimeStep, -config.integralClamp, config.integralClamp));
-            }
 
 
             active = false;
@@ -128,6 +110,7 @@ namespace IngameScript
             ProjectileVelocity = newDetails.ProjectileVelocity;
             leadAcceleration = newDetails.leadAcceleration;
 
+            UpdateDerivative();
             if (hasTarget && aim)
             {
                 active = true;
@@ -203,6 +186,20 @@ namespace IngameScript
 
             }
 
+        private void UpdateDerivative()
+        {
+            Vector3D angularVelocity = currentController.GetShipVelocities().AngularVelocity;
+            angularVelocity = Vector3D.TransformNormal(angularVelocity, MatrixD.Transpose(currentController.WorldMatrix));
+            angularVelocity.Z = 0;
+
+            angularVelocity *= 60 / (2 * Math.PI);
+            
+            double newKD = Math.Pow(angularVelocity.Length(), config.derivativeNonLinearity);
+            LCDManager.AddText("New KD: " + (newKD * config.kD));
+            pitch.Kd = newKD * config.kD;
+            yaw.Kd = newKD * config.kD;
+
+        }
         }
 
         private double ControlPIDList(List<ClampedIntegralPID> pidList, double error)
@@ -225,9 +222,8 @@ namespace IngameScript
             {
                 var waxis = Vector3D.Cross(currentController.WorldMatrix.Forward, desiredGlobalFwdNormalized);
                 Vector3D axis = Vector3D.TransformNormal(waxis, MatrixD.Transpose(currentController.WorldMatrix));
-                double x = ControlPIDList(pitches, -axis.X);
-                double y = ControlPIDList(yaws, -axis.Y);
-
+                double x = pitch.Control(-axis.X);
+                double y = yaw.Control(-axis.Y);
 
                 gp = (float)MathHelper.Clamp(x, -config.maxAngular, config.maxAngular);
                 gy = (float)MathHelper.Clamp(y, -config.maxAngular, config.maxAngular);
@@ -239,10 +235,11 @@ namespace IngameScript
             }
             if (Math.Abs(gy) + Math.Abs(gp) > config.maxAngular)
             {
-                double adjust = config.maxAngular / (Math.Abs(gy) + Math.Abs(gp) + Math.Abs(gr));
+                double adjust = config.maxAngular / (Math.Abs(gy) + Math.Abs(gp));
                 gy *= adjust;
                 gp *= adjust;
-                gr *= adjust;
+                // No you're right, this sucks
+                gr = Vector3D.TransformNormal(currentController.GetShipVelocities().AngularVelocity, MatrixD.Transpose(currentController.WorldMatrix)).Z * 10;
             }
             const double sigma = 0.000009;
             if (Math.Abs(gp) < sigma) gp = 0;

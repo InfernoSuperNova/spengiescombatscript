@@ -9,6 +9,7 @@ using SpaceEngineers.Game.ModAPI.Ingame;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using VRage.Game;
 using VRage.Game.ModAPI.Ingame.Utilities;
 using VRage.Game.ObjectBuilders.Definitions;
@@ -75,8 +76,9 @@ namespace IngameScript
         float PassiveRadius = 300;                      //For passive antenna range
         float TransmitRadius = 50000;                   //For transmitting enemy location
         string TransmitMessage = "";
-        
 
+        bool doVolley = false;
+        int volleyDelayFrames = 20;
 
         
 
@@ -555,6 +557,7 @@ namespace IngameScript
             probabilityOfFlippingRollSign = _ini.Get(dcs, "probabilityOfFlippingRollSign").ToSingle(probabilityOfFlippingRollSign);
             autonomousFireSigma = _ini.Get(dcs, "autonomousFireSigma").ToSingle(autonomousFireSigma);
             flightDeck = _ini.Get(dcs, "flightDeck").ToSingle(flightDeck);
+            maxFramesToFollowDriftingTarget = _ini.Get(dcs, "maxFramesToFollowDriftingTarget").ToInt32(maxFramesToFollowDriftingTarget);
             useJumping = _ini.Get(dcs, "useJumping").ToBoolean(useJumping);
             minDistanceToJump = _ini.Get(dcs, "minDistanceToJump").ToSingle(minDistanceToJump);
 
@@ -568,6 +571,7 @@ namespace IngameScript
             _ini.Set(dcs, "probabilityOfFlippingRollSign", probabilityOfFlippingRollSign);
             _ini.Set(dcs, "autonomousFireSigma", autonomousFireSigma);
             _ini.Set(dcs, "flightDeck", flightDeck);
+            _ini.Set(dcs, "maxFramesToFollowDriftingTarget", maxFramesToFollowDriftingTarget);
             _ini.Set(dcs, "useJumping", useJumping);
             _ini.Set(dcs, "minDistanceToJump", minDistanceToJump);
 
@@ -594,11 +598,8 @@ namespace IngameScript
             kP = _ini.Get(pcs, "kP").ToDouble(kP);
             kI = _ini.Get(pcs, "kI").ToDouble(kI);
             kD = _ini.Get(pcs, "kD").ToDouble(kD);
-            cascadeCount = _ini.Get(pcs, "cascadeCount").ToInt32(cascadeCount);
-            cPscaling = _ini.Get(pcs, "cPscaling").ToDouble(cPscaling);
-            cIscaling = _ini.Get(pcs, "cIscaling").ToDouble(cIscaling);
-            cDscaling = _ini.Get(pcs, "cDscaling").ToDouble(cDscaling);
             integralClamp = _ini.Get(pcs, "integralClamp").ToDouble(integralClamp);
+            derivativeNonLinearity = _ini.Get(pcs, "derivativeNonLinearity").ToDouble(derivativeNonLinearity);
 
             // setting aimbot PID config
             _ini.Set(pcs, "autonomouskP", autonomouskP);
@@ -607,11 +608,8 @@ namespace IngameScript
             _ini.Set(pcs, "kP", kP);
             _ini.Set(pcs, "kI", kI);
             _ini.Set(pcs, "kD", kD);
-            _ini.Set(pcs, "cascadeCount", cascadeCount);
-            _ini.Set(pcs, "cPscaling", cPscaling);
-            _ini.Set(pcs, "cIscaling", cIscaling);
-            _ini.Set(pcs, "cDscaling", cDscaling);
             _ini.Set(pcs, "integralClamp", integralClamp);
+            _ini.Set(pcs, "derivativeNonLinearity", derivativeNonLinearity);
 
             _ini.SetSectionComment(pcs, "\n\nPID configuration for the aimbot script.\n\nEDIT HERE:");
             
@@ -750,10 +748,7 @@ namespace IngameScript
             aimDetails.kP = kP;
             aimDetails.kI = kI;
             aimDetails.kD = kD;
-            aimDetails.cPscaling = cPscaling;
-            aimDetails.cIscaling = cIscaling;
-            aimDetails.cDscaling = cDscaling;
-            aimDetails.cascadeCount = cascadeCount;
+            aimDetails.derivativeNonLinearity = derivativeNonLinearity;
             aimDetails.integralClamp = integralClamp;
             aimDetails.maxRollPowerToFlipRollSign = maxRollPowerToFlipRollSign;
             aimDetails.minAutonomousRollPower = minAutonomousRollPower;
